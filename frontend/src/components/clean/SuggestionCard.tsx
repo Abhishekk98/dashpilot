@@ -1,19 +1,30 @@
 import { Icon } from "@/components/ui/Icon";
-import type { CleaningStatus, CleaningStep, NullStrategy } from "@/lib/api";
+import type { CleaningStatus, CleaningStep, CleaningStrategy, DetectedType } from "@/lib/api";
 import { TYPE_STYLES, formatNumber } from "@/lib/format";
 
-const STRATEGY_LABELS: Record<NullStrategy, string> = {
-  fill_median: "Fill median",
-  fill_unknown: "Fill 'Unknown'",
-  remove_rows: "Remove rows",
-  flag: "Keep blank + flag",
-};
+/** Chip labels for strategy ids; flag/blank wording depends on the step kind. */
+function strategyLabel(step: CleaningStep, s: CleaningStrategy): string {
+  const labels: Record<string, string> = {
+    fill_median: "Fill median",
+    fill_unknown: "Fill 'Unknown'",
+    remove_rows: "Remove rows",
+    flag: step.kind === "handle_nulls" ? "Keep blank + flag" : "Keep + flag",
+    blank: "Set to blank",
+    most_complete: "Most complete row",
+    latest: "Latest row",
+    first: "First row",
+    day_first: "Day first (dd/mm)",
+    month_first: "Month first (mm/dd)",
+    unknown_member: "Map to 'Unknown'",
+  };
+  return labels[s] ?? s;
+}
 
 interface SuggestionCardProps {
   step: CleaningStep;
   busy: boolean;
   onStatus: (status: CleaningStatus) => void;
-  onStrategy: (strategy: NullStrategy) => void;
+  onStrategy: (strategy: CleaningStrategy) => void;
 }
 
 /** One cleaning suggestion: impact tag, include toggle, explanation, evidence and Accept / Skip. */
@@ -33,8 +44,16 @@ export function SuggestionCard({ step, busy, onStatus, onStrategy }: SuggestionC
     >
       {accepted && <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-secondary-container" />}
       <div className="flex items-center justify-between gap-3">
-        <span className={`px-3 py-1 rounded-full font-label-sm text-label-sm tracking-wide ${tagClass}`}>
-          {step.impact} Impact — {step.category}
+        <span className="flex flex-wrap items-center gap-1.5">
+          <span className={`px-3 py-1 rounded-full font-label-sm text-label-sm tracking-wide ${tagClass}`}>
+            {step.impact} Impact — {step.category}
+          </span>
+          {step.source === "ai" && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-primary-container text-secondary-container font-label-sm text-label-sm">
+              <Icon name="auto_awesome" className="text-[12px]" />
+              AI
+            </span>
+          )}
         </span>
         <button
           type="button"
@@ -57,8 +76,15 @@ export function SuggestionCard({ step, busy, onStatus, onStrategy }: SuggestionC
 
       <Evidence step={step} />
 
+      {step.error && accepted && (
+        <p role="status" className="px-3 py-2 rounded-xl bg-error-container/50 text-on-error-container font-body-md text-xs flex items-start gap-2">
+          <Icon name="info" className="text-[16px] shrink-0" />
+          <span>Not applied: {step.error.replace(/^(Skipped|Failed): /, "")}. The other steps still ran.</span>
+        </p>
+      )}
+
       {step.strategies.length > 1 && (
-        <div className="flex flex-wrap items-center gap-1.5" role="radiogroup" aria-label="Missing-value strategy">
+        <div className="flex flex-wrap items-center gap-1.5" role="radiogroup" aria-label="Cleaning strategy">
           {step.strategies.map((s) => (
             <button
               key={s}
@@ -72,7 +98,7 @@ export function SuggestionCard({ step, busy, onStatus, onStrategy }: SuggestionC
                   : "bg-surface-container-low text-on-surface-variant hover:text-on-surface"
               }`}
             >
-              {STRATEGY_LABELS[s]}
+              {strategyLabel(step, s)}
             </button>
           ))}
         </div>
@@ -103,7 +129,7 @@ export function SuggestionCard({ step, busy, onStatus, onStrategy }: SuggestionC
 
 /** Small evidence strip under the description, different per step kind. */
 function Evidence({ step }: { step: CleaningStep }) {
-  if (step.kind === "standardise_categories") {
+  if (step.kind === "standardise_categories" || step.kind === "merge_synonyms") {
     const shown = step.merges.slice(0, 2);
     const more = step.merges.length - shown.length;
     return (
@@ -138,14 +164,27 @@ function Evidence({ step }: { step: CleaningStep }) {
       <div className="flex flex-wrap gap-1.5">
         {Object.entries(step.types).map(([col, type]) => (
           <span key={col} className="px-2.5 py-1 rounded-xl bg-surface-container-low font-code-sm text-code-sm text-on-surface-variant">
-            {col} → <span className="text-on-surface font-semibold">{TYPE_STYLES[type].label}</span>
+            {col} → <span className="text-on-surface font-semibold">{TYPE_STYLES[type as DetectedType]?.label ?? type}</span>
           </span>
         ))}
       </div>
     );
   }
 
-  const label = step.kind === "remove_duplicates" ? "Rows affected" : step.kind === "cast_numeric" ? "Values converted" : "Blank values";
+  const LABELS: Partial<Record<CleaningStep["kind"], string>> = {
+    cast_numeric: "Values converted",
+    cast_european: "Values converted",
+    normalise_booleans: "Values converted",
+    date_format: "Dates read",
+    excel_serial_dates: "Dates converted",
+    handle_nulls: "Blank values",
+    clean_whitespace: "Rows cleaned",
+    dedupe_key: "Extra rows",
+    orphan_keys: "Orphan rows",
+    sentinel_values: "Placeholder values",
+    date_outliers: "Impossible dates",
+  };
+  const label = LABELS[step.kind] ?? "Rows affected";
   return (
     <div className="flex items-center gap-2 py-2 px-3 rounded-xl bg-surface-container-low font-code-sm text-code-sm text-on-surface-variant">
       <Icon name="insights" className="text-[16px] text-secondary" />

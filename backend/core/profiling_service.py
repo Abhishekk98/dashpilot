@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import io
 
-from core.profiling import QualityReport, build_report
+from core.profiling import READER_VERSION, QualityReport, build_report
 from core.projects import Project, ProjectStore
 from core.semantic_roles import refine_roles
 from core.upload import read_tables
@@ -34,6 +34,8 @@ def get_report(
     ai=True additionally runs the AI role refinement once and caches the refined report.
     """
     cached = None if refresh else store.read_profile(project.id)
+    if cached is not None and cached.get("reader_version", 1) != READER_VERSION:
+        cached = None  # files are read differently now; column names / nulls may differ
     if cached is not None:
         report = QualityReport.model_validate(cached)
         if report.ai_refined:

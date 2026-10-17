@@ -1,0 +1,235 @@
+"""Fuzz test: hundreds of random messy CSV/Excel files must never break reading, profiling,
+cleaning (every suggestion accepted, random strategies), M generation, preview or the model step.
+
+Steps may legitimately be *skipped* (e.g. filling 'Unknown' into a column an earlier step made
+numeric), but no detector or step may *fail* with an exception.
+"""
+
+import io
+import random
+import string
+
+import openpyxl
+import pytest
+
+from core import tmdl
+from core.cleaning import SourceTable, preview
+from core.cleaning_rules import build_plan, table_pipelines
+from core.modelling import ModelSettings, build_model
+from core.profiling import build_report
+from core.upload import UploadError, read_tables
+
+DATASETS = 300
+BATCH = 10
+
+CITIES = ["Delhi", "delhi", "New Delhi", "Mumbai", "Bombay", "Bengaluru", "Bangalore", "Pune", "PUNE", "Kolkata ", " Chennai "]
+GENDERS = ["M", "Male", "male", "F", "Female", "female", "Other"]
+BOOLS = ["Yes", "No", "Y", "N", "1", "0", "TRUE", "false", "on", "off"]
+NULLS = ["", "NA", "N/A", "null", "-", "#N/A", "  "]
+WEIRD = ['quote "inside"', "line\nbreak", "tab\there", "emoji \U0001F600", "ünïcödé", "a,b;c|d", "=SUM(A1)", "  padded  ", "zero​width"]
+
+
+def _value(kind: str, i: int, rng: random.Random, ids: list[str]):
+    if rng.random() < 0.07:
+        return rng.choice(NULLS)
+    if kind == "id":
+        return f"K{i:04d}"
+    if kind == "dup_id":
+        return f"K{rng.randint(0, max(1, i)):04d}"
+    if kind == "fk":
+        return rng.choice(ids) if ids and rng.random() < 0.9 else f"K{rng.randint(5000, 5100):04d}"
+    if kind == "currency":
+        return rng.choice([f"${rng.uniform(-50, 5000):,.2f}", f"₹{rng.randint(1, 90000):,}", f"({rng.randint(1, 99)})", "$abc", "9,999,999"])
+    if kind == "percent":
+        return rng.choice([f"{rng.randint(0, 100)}%", f"{rng.uniform(0, 1):.1%}", "n/a%"])
+    if kind == "euro":
+        return rng.choice([f"{rng.randint(1, 999)}.{rng.randint(100, 999)},{rng.randint(10, 99)}", f"{rng.randint(1, 99)},{rng.randint(0, 9)}"])
+    if kind == "int":
+        return str(rng.choice([rng.randint(-5, 500), 9999999, -1, 0]))
+    if kind == "decimal":
+        return f"{rng.uniform(-100, 100):.3f}"
+    if kind == "date_iso":
+        return rng.choice([f"20{rng.randint(10, 30):02d}-{rng.randint(1, 12):02d}-{rng.randint(1, 28):02d}", "1850-01-01", "2099-12-31", "not a date"])
+    if kind == "date_dmy":
+        return f"{rng.randint(1, 28):02d}/{rng.randint(1, 12):02d}/{rng.choice(['2023', '2024', '24'])}"
+    if kind == "date_mdy":
+        return f"{rng.randint(1, 12)}/{rng.randint(1, 28)}/2023"
+    if kind == "datetime_tz":
+        return rng.choice(["2024-03-01T10:00:00+05:30", "2024-03-02 11:30", "2024-03-03T09:00:00Z", "2024-13-45 99:99"])
+    if kind == "excel_serial":
+        return str(rng.choice([rng.randint(40000, 46000), rng.uniform(40000, 46000), 0]))
+    if kind == "bool_variants":
+        return rng.choice(BOOLS)
+    if kind == "bool_simple":
+        return rng.choice(["Yes", "No"])
+    if kind == "category_case":
+        return rng.choice(["Electronics", "ELECTRONICS", "electronics", "Fashion", "fashion "])
+    if kind == "gender":
+        return rng.choice(GENDERS)
+    if kind == "city":
+        return rng.choice(CITIES)
+    if kind == "weird":
+        return rng.choice(WEIRD)
+    if kind == "all_null":
+        return ""
+    if kind == "total_label":
+        return rng.choice(["North", "South", "East"])
+    return "".join(rng.choices(string.ascii_letters + " ", k=rng.randint(1, 12)))
+
+
+KINDS = ["id", "dup_id", "fk", "currency", "percent", "euro", "int", "decimal", "date_iso", "date_dmy", "date_mdy",
+         "datetime_tz", "excel_serial", "bool_variants", "bool_simple", "category_case", "gender", "city", "weird",
+         "all_null", "total_label", "text"]
+NAMES = {"id": "customer_id", "dup_id": "customer_id", "fk": "customer_id", "excel_serial": "signup_date", "gender": "gender",
+         "int": "age", "city": "city", "date_iso": "order_date", "date_dmy": "visit_date", "date_mdy": "ship_date"}
+
+
+def _table(rng: random.Random, ids: list[str], key_kind: str) -> list[list]:
+    kinds = [key_kind] + rng.sample(KINDS, rng.randint(2, 9))
+    header = []
+    for k in kinds:
+        name = NAMES.get(k, k) if rng.random() < 0.7 else rng.choice(["", "Amount", "amount", "x_is_missing", "Order ID", "näme", "a'b\"c"])
+        header.append(name)
+    rows_n = rng.choice([1, 2, 3, 8, 25, 60])
+    rows = [header] + [[_value(k, i, rng, ids) for k in kinds] for i in range(rows_n)]
+    if rng.random() < 0.3:  # a Total row
+        rows.append(["Total"] + ["" for _ in kinds[1:]])
+    if rng.random() < 0.2 and rows_n > 2:  # exact duplicate rows
+        rows += rows[1:3]
+    if rng.random() < 0.2:  # blank rows in the middle
+        rows.insert(2, [""] * len(kinds))
+    if rng.random() < 0.25:  # title rows above the header
+        rows = [["Report generated by ERP"], [""]] + rows
+    if rng.random() < 0.15:  # ragged rows
+        rows[-1] = rows[-1] + ["extra", "cells"]
+    return rows
+
+
+def _csv_bytes(rows: list[list], rng: random.Random) -> bytes:
+    delimiter = rng.choice([",", ";", "\t", "|"])
+    out = io.StringIO()
+    import csv
+
+    csv.writer(out, delimiter=delimiter).writerows(rows)
+    text = out.getvalue()
+    if rng.random() < 0.3:
+        try:
+            return text.encode("cp1252")
+        except UnicodeEncodeError:
+            pass
+    return text.encode("utf-8")
+
+
+def _xlsx_bytes(sheets: dict[str, list[list]]) -> bytes:
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    for name, rows in sheets.items():
+        ws = wb.create_sheet(name[:31])
+        for r in rows:
+            ws.append([None if v == "" else v for v in r])
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def dataset(seed: int) -> dict[str, bytes]:
+    rng = random.Random(seed)
+    ids = [f"K{i:04d}" for i in range(rng.randint(3, 40))]
+    dim = _table(rng, [], "id")
+    fact = _table(rng, ids, "fk")
+    if rng.random() < 0.5:
+        return {"customers.csv": _csv_bytes(dim, rng), "orders.csv": _csv_bytes(fact, rng)}
+    sheets = {"customers": dim, "orders": fact}
+    if rng.random() < 0.4:
+        sheets["README"] = [["About this file"], ["Generated for testing"]]
+    if rng.random() < 0.3:
+        sheets["Empty"] = []
+    return {"book.xlsx": _xlsx_bytes(sheets)}
+
+
+def m_is_balanced(script: str) -> bool:
+    """Brackets balance outside string literals, quoted identifiers and comments."""
+    depth = {"(": 0, "[": 0, "{": 0}
+    closing = {")": "(", "]": "[", "}": "{"}
+    i, n = 0, len(script)
+    while i < n:
+        c = script[i]
+        if c == "/" and script.startswith("//", i):
+            i = script.find("\n", i)
+            if i == -1:
+                break
+            continue
+        if c == '"':
+            i += 1
+            while i < n:
+                if script[i] == '"':
+                    if i + 1 < n and script[i + 1] == '"':
+                        i += 2
+                        continue
+                    break
+                i += 1
+        elif c in depth:
+            depth[c] += 1
+        elif c in closing:
+            depth[closing[c]] -= 1
+            if depth[closing[c]] < 0:
+                return False
+        i += 1
+    return all(v == 0 for v in depth.values())
+
+
+def run(files: dict[str, bytes], seed: int) -> None:
+    rng = random.Random(seed * 7919)
+    sources = []
+    for filename, content in files.items():
+        try:
+            tables = read_tables(filename, content)
+        except UploadError:
+            continue  # e.g. a file whose only sheet is empty: rejected with a message, not a crash
+        delimiter = "," if not filename.endswith(".csv") else __import__("core.upload", fromlist=["csv_delimiter"]).csv_delimiter(content)
+        sources += [SourceTable(name=n, filename=filename, sheet=s, delimiter=delimiter, df=df) for n, (s, df) in tables.items()]
+    if not sources:
+        return
+    report = build_report([(s.name, "f", s.sheet, s.df) for s in sources])
+    plan = build_plan(report, sources, {})
+    assert not [w for w in plan.warnings if "check was skipped" in w], plan.warnings
+
+    decisions = {
+        s.id: {"status": "accepted", **({"strategy": rng.choice(s.strategies)} if s.strategies else {})}
+        for s in plan.steps
+    }
+    pipelines, warnings = table_pipelines(report, sources, decisions)
+    failed = [s.error for p in pipelines.values() for s in p.accepted if s.error and s.error.startswith("Failed")]
+    assert not failed, failed
+    assert not [w for w in warnings if "check was skipped" in w], warnings
+
+    for name, p in pipelines.items():
+        assert m_is_balanced(p.result.m_script), p.result.m_script
+        accepted = [s for s in p.accepted if not s.error]
+        key = next((c.name for c in report.tables[[t.name for t in report.tables].index(name)].column_profiles if c.role == "primary_key"), None)
+        preview(p.src, p.result, accepted, key)
+
+    cleaned = {name: (p.src, [s for s in p.accepted if not s.error], p.result) for name, p in pipelines.items()}
+    model = build_model(report, cleaned, ModelSettings())
+    files_out = tmdl.build_files(model, {n: p.result for n, p in pipelines.items()}, "Fuzz")
+    tmdl.check(model)
+    for path, content in files_out.items():
+        if path.endswith(".tmdl") and "/tables/" in path:
+            source = content.split("source =", 1)[1]
+            assert m_is_balanced(source), path
+
+
+@pytest.mark.parametrize("batch", range(DATASETS // BATCH))
+def test_random_messy_datasets_never_break(batch):
+    for seed in range(batch * BATCH, (batch + 1) * BATCH):
+        try:
+            run(dataset(seed), seed)
+        except AssertionError as exc:
+            raise AssertionError(f"seed {seed}: {exc}") from exc
+        except Exception as exc:
+            raise AssertionError(f"seed {seed} crashed: {type(exc).__name__}: {exc}") from exc
+
+
+def test_m_balance_checker():
+    assert m_is_balanced('let a = "x)" in Table.F({a, [b]}) // )')
+    assert not m_is_balanced("let a = (1 in a")

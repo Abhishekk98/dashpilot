@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from app.api.deps import get_store
 from app.config import Settings, get_settings
 from core.cleaning import CleaningPlan, Decision, DiffPreview
-from core.cleaning_service import CleaningError, get_plan, get_preview, save_decisions
+from core.cleaning_service import CleaningError, get_plan, get_preview, run_ai_synonyms, save_decisions
 from core.profiling import QualityReport
 from core.profiling_service import columns_csv, get_report
 from core.projects import Project, ProjectNotFoundError, ProjectStore, StoredFile, TableRef, new_file_id
@@ -123,6 +123,16 @@ def post_cleaning_decisions(
         return save_decisions(store, _load(store, project_id), llm, body.decisions)
     except CleaningError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
+
+
+@router.post("/{project_id}/cleaning/synonyms", response_model=CleaningPlan)
+def post_cleaning_synonyms(
+    project_id: str,
+    store: ProjectStore = Depends(get_store),
+    llm: LLMProvider | None = Depends(get_llm),
+) -> CleaningPlan:
+    """Ask the AI for synonym groups (e.g. M -> Male); they appear as reviewable suggestions."""
+    return run_ai_synonyms(store, _load(store, project_id), llm)
 
 
 @router.get("/{project_id}/cleaning/preview", response_model=DiffPreview)

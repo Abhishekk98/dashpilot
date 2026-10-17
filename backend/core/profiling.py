@@ -16,6 +16,8 @@ from pydantic import BaseModel, Field
 
 # --- report models ------------------------------------------------------------
 
+READER_VERSION = 2  # bump when core/upload.py reads files differently
+
 DetectedType = Literal[
     "id", "uuid", "currency", "percentage", "integer", "decimal",
     "date", "datetime", "boolean", "email", "location", "category", "text",
@@ -88,6 +90,8 @@ class QualityReport(BaseModel):
     # done = roles refined by AI, failed = AI call failed (ai_note says why).
     ai_status: Literal["off", "pending", "done", "failed"] = "off"
     ai_note: str | None = None
+    # Bumped when core/upload.py reads files differently, so cached reports are rebuilt.
+    reader_version: int = READER_VERSION
 
 
 # --- type detection -------------------------------------------------------------
@@ -121,7 +125,19 @@ def _to_number(values: pd.Series) -> pd.Series:
 
 
 def _to_datetime(values: pd.Series) -> pd.Series:
-    return pd.to_datetime(values, errors="coerce", format="mixed")
+    """Parse text to naive datetimes (NaT when not a date). Mixed time zones are converted to UTC."""
+    try:
+        out = pd.to_datetime(values, errors="coerce", format="mixed")
+    except (ValueError, TypeError, OverflowError):
+        out = None
+    if out is None or not pd.api.types.is_datetime64_any_dtype(out):
+        try:
+            out = pd.to_datetime(values, errors="coerce", format="mixed", utc=True)
+        except (ValueError, TypeError, OverflowError):
+            return pd.Series(pd.NaT, index=values.index, dtype="datetime64[ns]")
+    if getattr(out.dt, "tz", None) is not None:
+        out = out.dt.tz_convert(None)
+    return out
 
 
 def detect_type(name: str, values: pd.Series) -> tuple[DetectedType, str | None, float]:

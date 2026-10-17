@@ -137,6 +137,14 @@ class ProjectStore:
     def write_context(self, project_id: str, data: dict) -> None:
         self._context(project_id).write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
 
+    # -- small per-project JSON documents ------------------------------------------
+    def read_json(self, project_id: str, filename: str) -> dict:
+        path = self.project_dir(project_id) / filename
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+    def write_json(self, project_id: str, filename: str, data: dict) -> None:
+        (self.project_dir(project_id) / filename).write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+
     # -- data model ------------------------------------------------------------
     def _model(self, project_id: str) -> Path:
         return self.project_dir(project_id) / "model.json"

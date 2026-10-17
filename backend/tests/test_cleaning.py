@@ -2,7 +2,8 @@
 
 import pandas as pd
 
-from core.cleaning import SourceTable, m_text, run_pipeline, suggest_steps
+from core.cleaning import SourceTable, m_text, run_pipeline
+from core.cleaning_rules import suggest_steps
 from core.profiling import profile_table
 
 
@@ -54,12 +55,16 @@ def test_pipeline_applies_steps_and_mirrors_them_in_m():
     assert df["discount"].iloc[3] == 0.05  # median 5% after de-duplication, stored as a fraction
     assert list(df["is_prime"]) == [True, False, True, False, False]
 
+    assert not result.warnings and not any(s.error for s in steps)
+
     m = result.m_script
     assert 'Csv.Document(File.Contents(DataFolder & "orders.csv"), [Delimiter=","' in m
     for name in ("Removed Duplicates", "Standardised city", "Cast revenue", "Cast discount",
-                 "Parsed Booleans", "Filled city", "Flagged Missing revenue", "Filled discount"):
+                 "Typed is_prime", "Filled city", "Flagged Missing revenue", "Filled discount"):
         assert f'#"{name}" = ' in m
     assert '#"delhi" = "Delhi"' in m and "Currency.Type" in m and "Percentage.Type" in m
+    # Value conversions never raise refresh errors: they go through try ... otherwise null helpers.
+    assert '#"fnNumber" = (v) =>' in m and "otherwise null" in m and "TransformColumnTypes" not in m
     assert 'Table.ReplaceValue(#"Flagged Missing revenue", null, 0.05, ' in m
     assert m.rstrip().endswith('#"Filled discount"')
 

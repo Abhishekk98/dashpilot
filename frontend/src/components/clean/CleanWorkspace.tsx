@@ -16,6 +16,7 @@ import {
   getProject,
   type Project,
   saveCleaningDecisions,
+  scanSynonyms,
 } from "@/lib/api";
 
 import { CleanActionBar } from "./CleanActionBar";
@@ -35,6 +36,7 @@ export function CleanWorkspace() {
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [previewLoading, setPreviewLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [scanning, setScanning] = useState(false);
   // Ignore preview answers for an older plan or table.
   const previewRequest = useRef(0);
 
@@ -79,6 +81,19 @@ export function CleanWorkspace() {
       setError((e as Error).message);
     } finally {
       setBusy((b) => new Set([...b].filter((id) => !ids.includes(id))));
+    }
+  };
+
+  const runSynonymScan = async () => {
+    if (!projectId) return;
+    setScanning(true);
+    setError(null);
+    try {
+      setPlan(await scanSynonyms(projectId));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setScanning(false);
     }
   };
 
@@ -154,6 +169,20 @@ export function CleanWorkspace() {
               })}
             </div>
           )}
+          {plan && plan.ai_synonyms !== "off" && (
+            <button
+              type="button"
+              disabled={scanning || plan.ai_synonyms === "done"}
+              title={plan.ai_note ?? "Ask the AI Co-Analyst to find synonyms such as M → Male or Bombay → Mumbai"}
+              onClick={runSynonymScan}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-secondary-container text-on-secondary-fixed shadow-sm font-label-md text-label-md font-semibold transition-all disabled:opacity-60"
+            >
+              <Icon name={scanning ? "sync" : "auto_awesome"} className={`text-[16px] ${scanning ? "animate-spin" : ""}`} />
+              <span>
+                {scanning ? "Scanning…" : plan.ai_synonyms === "done" ? "AI Synonyms Checked" : plan.ai_synonyms === "failed" ? "Retry AI Synonym Scan" : "Find Synonyms with AI"}
+              </span>
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setAllScripts((v) => !v)}
@@ -178,6 +207,31 @@ export function CleanWorkspace() {
         <div role="alert" className="mb-6 p-4 rounded-inner bg-error-container/60 text-on-error-container flex items-start gap-3">
           <Icon name="error" className="text-[20px] mt-0.5" />
           <span className="font-body-md text-body-md">{error}</span>
+        </div>
+      )}
+
+      {plan && (plan.warnings.length > 0 || (active?.structure_notes.length ?? 0) > 0 || plan.ai_synonyms === "failed") && (
+        <div className="mb-6 p-4 rounded-inner bg-surface-container-lowest/80 backdrop-blur-md shadow-card flex flex-col gap-2">
+          {active?.structure_notes.map((n) => (
+            <p key={n} className="flex items-start gap-2 font-body-md text-xs text-on-surface">
+              <Icon name="build" className="text-[16px] text-pine shrink-0" />
+              <span>
+                <span className="font-semibold">Auto-fixed while reading {active.name}:</span> {n}
+              </span>
+            </p>
+          ))}
+          {plan.warnings.map((w) => (
+            <p key={w} className="flex items-start gap-2 font-body-md text-xs text-on-surface-variant">
+              <Icon name="info" className="text-[16px] text-coral shrink-0" />
+              <span>{w}</span>
+            </p>
+          ))}
+          {plan.ai_synonyms === "failed" && plan.ai_note && (
+            <p className="flex items-start gap-2 font-body-md text-xs text-on-surface-variant">
+              <Icon name="info" className="text-[16px] text-coral shrink-0" />
+              <span>AI synonym scan did not finish ({plan.ai_note}). The rule-based synonym dictionary is still used.</span>
+            </p>
+          )}
         </div>
       )}
 

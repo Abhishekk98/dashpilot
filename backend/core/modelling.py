@@ -17,7 +17,7 @@ from typing import Literal
 import pandas as pd
 from pydantic import BaseModel, Field
 
-from core.cleaning import CleaningStep, PipelineResult, SourceTable
+from core.cleaning import KIND_ORDER, CleaningStep, PipelineResult, SourceTable
 from core.profiling import QualityReport, TableProfile
 from llm import LLMError, LLMProvider
 
@@ -165,9 +165,16 @@ def _source_label(src: SourceTable) -> str:
     return src.filename + (f" › {src.sheet}" if src.sheet else "")
 
 
+_CONVERTING = ("normalise_booleans", "cast_numeric", "cast_european", "date_format", "set_types", "excel_serial_dates")
+
+
 def _typed_columns(accepted: list[CleaningStep]) -> dict[str, str]:
-    """Columns the Clean step converts away from text, with their detected type."""
-    return {c: t for s in accepted if s.kind in ("cast_numeric", "set_types") for c, t in s.types.items()}
+    """Columns the Clean step converts away from text, with their final type (later steps win)."""
+    typed: dict[str, str] = {}
+    for s in sorted(accepted, key=lambda s: KIND_ORDER.index(s.kind)):
+        if s.kind in _CONVERTING and not s.error:
+            typed.update(s.types)
+    return typed
 
 
 def exclusion_reason(profile: TableProfile) -> str | None:
@@ -218,20 +225,42 @@ def _columns(profile: TableProfile, result: PipelineResult, accepted: list[Clean
         data_type: DataType = TMDL_TYPES.get(typed.get(prof.name, ""), "string")
         key = "pk" if prof.role == "primary_key" else "fk" if prof.role == "foreign_key" else None
         cols.append(ModelColumn(
-            name=prof.name, data_type=data_type, detected_type=prof.detected_type, key=key,
+            name=prof.name, data_type=data_type, detected_type=typed.get(prof.name, prof.detected_type), key=key,
             measure_candidate=prof.role == "measure" and data_type in NUMERIC,
         ))
     return cols
 
 
-def _rule_kinds(tables: list[ModelTable], report: QualityReport) -> dict[str, TableKind]:
+def _cleaned_links(included: list[ModelTable], frames: dict[str, pd.DataFrame], profiles: dict[str, TableProfile]) -> list[RelationshipInput]:
+    """Same-named ID columns where one side is unique after cleaning and holds most of the other
+    side's values. Catches keys that only became unique in Clean Data (e.g. one row per customer)."""
+    links = []
+    for t in included:
+        for prof in profiles[t.name].column_profiles:
+            if prof.detected_type not in ("id", "uuid") or prof.name not in frames[t.name]:
+                continue
+            many = frames[t.name][prof.name].dropna().astype(str)
+            if many.empty or many.is_unique:
+                continue
+            for other in included:
+                if other.name == t.name or prof.name not in frames[other.name]:
+                    continue
+                one = frames[other.name][prof.name].dropna().astype(str)
+                if len(one) and one.is_unique and many.isin(set(one)).mean() >= 0.8:
+                    links.append(RelationshipInput(from_table=t.name, from_column=prof.name, to_table=other.name, to_column=prof.name))
+    return links
+
+
+def _rule_kinds(tables: list[ModelTable], report: QualityReport, links: list[RelationshipInput]) -> dict[str, TableKind]:
     """Referenced tables are dimensions, tables with outgoing keys are facts, else the biggest measure table."""
     included = {t.name for t in tables if t.included}
     profiles = {t.name: t for t in report.tables}
     targets = {c.role_target for t in report.tables if t.name in included for c in t.column_profiles if c.role == "foreign_key"}
+    targets |= {link.to_table for link in links}
+    sources = {link.from_table for link in links}
     kinds: dict[str, TableKind] = {}
     for t in tables:
-        outgoing = any(c.role == "foreign_key" and c.role_target in included for c in profiles[t.name].column_profiles)
+        outgoing = t.name in sources or any(c.role == "foreign_key" and c.role_target in included for c in profiles[t.name].column_profiles)
         kinds[t.name] = "dimension" if t.name in targets and not outgoing else "fact" if outgoing else "dimension"
     if included and not any(kinds[n] == "fact" for n in included):
         def weight(name: str) -> tuple[int, int]:
@@ -287,7 +316,16 @@ def build_model(
             exclusion_reason=None if included else reason, rows=len(result.df), source=_source_label(src),
             columns=_columns(profile, result, accepted),
         ))
-    kinds = _rule_kinds(tables, report)
+    frames = {n: cleaned[n][2].df for n in cleaned}
+    links = _cleaned_links([t for t in tables if t.included], frames, profiles)
+    for link in links:  # mark the key columns so they are hidden and drawn as keys
+        for t in tables:
+            for c in t.columns:
+                if (t.name, c.name) == (link.to_table, link.to_column):
+                    c.key = "pk"
+                elif (t.name, c.name) == (link.from_table, link.from_column) and c.key is None:
+                    c.key = "fk"
+    kinds = _rule_kinds(tables, report, links)
     for t in tables:
         t.kind = kinds[t.name]
         if t.name in ai_tables:
@@ -300,10 +338,9 @@ def build_model(
             t.grain = f"1 row per {pk}" if pk else "no unique key"
     by_name = {t.name: t for t in tables}
     included = [t for t in tables if t.included]
-    frames = {n: cleaned[n][2].df for n in cleaned}
-    types = {(t.name, c.name): c.data_type for t in tables for c in t.columns}
+    types ={(t.name, c.name): c.data_type for t in tables for c in t.columns}
 
-    # 2. relationships from detected foreign keys, then the user's additions
+    # 2. relationships from detected foreign keys and key links in the cleaned data, then the user's additions
     candidates: list[tuple[RelationshipInput, Literal["auto", "user"]]] = []
     for t in included:
         for c in profiles[t.name].column_profiles:
@@ -313,6 +350,7 @@ def build_model(
             pk = next((x.name for x in target.columns if x.key == "pk"), None) or (c.name if c.name in frames[target.name] else None)
             if pk:
                 candidates.append((RelationshipInput(from_table=t.name, from_column=c.name, to_table=target.name, to_column=pk), "auto"))
+    candidates += [(link, "auto") for link in links]
     candidates += [(r, "user") for r in settings.added_relationships]
 
     relationships: list[Relationship] = []
@@ -340,11 +378,11 @@ def build_model(
                 continue
             for c in t.columns:
                 prof = next((p for p in profiles[t.name].column_profiles if p.name == c.name), None)
-                if prof is None or prof.role != "time_dimension":
+                if prof is None or c.derived:
                     continue
-                if c.data_type == "dateTime":
+                if c.data_type == "dateTime":  # includes Excel serials / text dates converted in Clean Data
                     date_cols.append((t, c))
-                else:
+                elif prof.role == "time_dimension":
                     untyped.append(f"{t.name}.{c.name}")
         if untyped:
             notes.append(ModelNote(

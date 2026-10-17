@@ -95,9 +95,12 @@ export interface UploadResult {
 }
 
 export type CleaningStepKind =
-  | "remove_duplicates" | "standardise_categories" | "cast_numeric" | "set_types" | "handle_nulls";
+  | "remove_total_rows" | "clean_whitespace" | "remove_duplicates" | "standardise_categories" | "merge_synonyms"
+  | "normalise_booleans" | "cast_numeric" | "cast_european" | "date_format" | "set_types" | "excel_serial_dates"
+  | "date_outliers" | "sentinel_values" | "dedupe_key" | "orphan_keys" | "handle_nulls" | "unknown_member";
 export type CleaningStatus = "pending" | "accepted" | "skipped";
-export type NullStrategy = "fill_median" | "fill_unknown" | "remove_rows" | "flag";
+/** Strategy ids per step kind, e.g. "fill_median", "latest", "day_first", "unknown_member". */
+export type CleaningStrategy = string;
 
 export interface ValueMerge {
   canonical: string;
@@ -117,11 +120,16 @@ export interface CleaningStep {
   rows_affected: number;
   affected_pct: number;
   status: CleaningStatus;
-  strategy: NullStrategy | null;
-  strategies: NullStrategy[];
+  strategy: CleaningStrategy | null;
+  strategies: CleaningStrategy[];
+  strategy_text: Record<string, [string, string]>;
   merges: ValueMerge[];
-  types: Record<string, DetectedType>;
+  types: Record<string, string>;
+  params: Record<string, unknown>;
   fill_value: number | null;
+  source: "rules" | "ai";
+  /** Set when the step could not be applied ("Skipped: …" / "Failed: …"); the rest still ran. */
+  error: string | null;
 }
 
 export interface TableCleaning {
@@ -131,6 +139,8 @@ export interface TableCleaning {
   rows_after: number;
   accepted: number;
   m_script: string;
+  /** Structure repairs applied while reading (title rows, blank/repeated headers, encoding). */
+  structure_notes: string[];
 }
 
 export interface CleaningPlan {
@@ -142,12 +152,16 @@ export interface CleaningPlan {
   score_after: number;
   rows_before: number;
   rows_after: number;
+  warnings: string[];
+  /** off = no AI key, available = scan not run yet, done / failed = see ai_note. */
+  ai_synonyms: "off" | "available" | "done" | "failed";
+  ai_note: string | null;
 }
 
 export interface CleaningDecision {
   step_id: string;
   status?: CleaningStatus;
-  strategy?: NullStrategy;
+  strategy?: CleaningStrategy;
 }
 
 export interface DiffCell {
@@ -400,6 +414,11 @@ export function saveModelSettings(id: string, settings: ModelSettings): Promise<
 
 export function tmdlZipUrl(id: string): string {
   return `${API_BASE_URL}/api/projects/${id}/model/tmdl.zip`;
+}
+
+/** AI pass that finds synonyms (M → Male, Bombay → Mumbai); results become reviewable suggestions. */
+export function scanSynonyms(id: string): Promise<CleaningPlan> {
+  return request(`/api/projects/${id}/cleaning/synonyms`, { method: "POST" });
 }
 
 export function getCleaningPreview(id: string, table: string): Promise<DiffPreview> {
