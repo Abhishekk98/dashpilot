@@ -7,6 +7,7 @@ Layout:
     storage/{project_id}/cleaning.json  accepted / skipped cleaning steps
     storage/{project_id}/context.json   business context + brand kit
     storage/{project_id}/brand/logo.*   uploaded logo
+    storage/{project_id}/model.json     data-model settings + cached AI table classification
 """
 
 from __future__ import annotations
@@ -135,6 +136,17 @@ class ProjectStore:
 
     def write_context(self, project_id: str, data: dict) -> None:
         self._context(project_id).write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+
+    # -- data model ------------------------------------------------------------
+    def _model(self, project_id: str) -> Path:
+        return self.project_dir(project_id) / "model.json"
+
+    def read_model(self, project_id: str) -> dict:
+        path = self._model(project_id)
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+    def write_model(self, project_id: str, data: dict) -> None:
+        self._model(project_id).write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     def logo_path(self, project_id: str, extension: str) -> Path:
         return self.project_dir(project_id) / "brand" / f"logo{extension}"

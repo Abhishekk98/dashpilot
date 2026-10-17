@@ -2,7 +2,20 @@
 
 from __future__ import annotations
 
-from core.cleaning import CleaningPlan, Decision, DiffPreview, SourceTable, apply_decisions, build_plan, preview, suggest_steps
+from core.cleaning import (
+    CleaningPlan,
+    CleaningStep,
+    Decision,
+    DiffPreview,
+    PipelineResult,
+    SourceTable,
+    apply_decisions,
+    build_plan,
+    preview,
+    run_pipeline,
+    suggest_steps,
+)
+from core.profiling import QualityReport
 from core.profiling_service import get_report
 from core.projects import Project, ProjectStore
 from core.upload import csv_delimiter, read_tables
@@ -56,6 +69,23 @@ def save_decisions(
             entry["strategy"] = d.strategy
     store.write_cleaning(project.id, data)
     return get_plan(store, project, llm)
+
+
+def cleaned_tables(
+    store: ProjectStore, project: Project, report: QualityReport
+) -> dict[str, tuple[SourceTable, list[CleaningStep], PipelineResult]]:
+    """Every profiled table after its accepted cleaning steps (what Power BI will load)."""
+    profiles = {t.name: t for t in report.tables}
+    decisions = store.read_cleaning(project.id)
+    out = {}
+    for src in load_sources(store, project):
+        if src.name not in profiles:
+            continue
+        steps = suggest_steps(profiles[src.name], src.df)
+        apply_decisions(steps, decisions, profiles)
+        accepted = [s for s in steps if s.status == "accepted"]
+        out[src.name] = (src, accepted, run_pipeline(src, accepted))
+    return out
 
 
 def get_preview(store: ProjectStore, project: Project, llm: LLMProvider | None, table: str) -> DiffPreview:

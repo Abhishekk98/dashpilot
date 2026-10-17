@@ -213,6 +213,74 @@ export interface PolishedGoals extends AiResult {
   goals: string;
 }
 
+export type TableKind = "fact" | "dimension" | "date";
+
+export interface ModelColumn {
+  name: string;
+  data_type: "string" | "int64" | "double" | "decimal" | "dateTime" | "boolean";
+  detected_type: DetectedType;
+  key: "pk" | "fk" | null;
+  hidden: boolean;
+  measure_candidate: boolean;
+  derived: boolean;
+}
+
+export interface ModelTable {
+  name: string;
+  kind: TableKind;
+  kind_source: "rules" | "ai" | "user";
+  included: boolean;
+  exclusion_reason: string | null;
+  rows: number;
+  source: string;
+  grain: string | null;
+  columns: ModelColumn[];
+}
+
+export interface RelationshipInput {
+  from_table: string;
+  from_column: string;
+  to_table: string;
+  to_column: string;
+}
+
+export interface Relationship extends RelationshipInput {
+  id: string;
+  cardinality: "many_to_one" | "one_to_one";
+  cross_filter: "single" | "both";
+  active: boolean;
+  origin: "auto" | "user" | "date";
+  valid: boolean;
+  missing_keys: number;
+  note: string | null;
+}
+
+export interface ModelSettings {
+  table_overrides: Record<string, { included?: boolean | null; kind?: "fact" | "dimension" | null }>;
+  removed_relationships: string[];
+  added_relationships: RelationshipInput[];
+  fiscal_year_start_month: number;
+  hide_keys: boolean;
+  date_table: boolean;
+}
+
+export interface ModelPlan {
+  tables: ModelTable[];
+  relationships: Relationship[];
+  date_table: { enabled: boolean; name: string; start: string | null; end: string | null; fiscal_year_start_month: number; sources: string[] };
+  settings: ModelSettings;
+  facts: number;
+  dimensions: number;
+  ambiguities: number;
+  hidden_columns: number;
+  health_score: number;
+  notes: { tone: "success" | "info" | "warning"; title: string; text: string }[];
+  ai_status: "off" | "pending" | "done" | "failed";
+  ai_note: string | null;
+  tmdl_valid: boolean;
+  tmdl_errors: string[];
+}
+
 export class ApiError extends Error {}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -315,6 +383,23 @@ export function suggestPalette(id: string, accent: string, useLogo: boolean): Pr
 
 export function polishGoals(id: string, goals: string): Promise<PolishedGoals> {
   return postJson(`/api/projects/${id}/context/polish`, { goals });
+}
+
+/** ai=false answers fast; ai=true also waits for the (cached) AI table classification. */
+export function getModel(id: string, ai: boolean): Promise<ModelPlan> {
+  return request(`/api/projects/${id}/model?ai=${ai}`);
+}
+
+export function saveModelSettings(id: string, settings: ModelSettings): Promise<ModelPlan> {
+  return request(`/api/projects/${id}/model`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
+  });
+}
+
+export function tmdlZipUrl(id: string): string {
+  return `${API_BASE_URL}/api/projects/${id}/model/tmdl.zip`;
 }
 
 export function getCleaningPreview(id: string, table: string): Promise<DiffPreview> {
