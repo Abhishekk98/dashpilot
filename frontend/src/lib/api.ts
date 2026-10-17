@@ -342,6 +342,59 @@ export interface MeasurePlan {
   ai_status: "off" | "available";
 }
 
+export type InsightType = "trend" | "comparison" | "anomaly" | "top_performer" | "contribution" | "rate_alert" | "answer";
+
+export interface Insight {
+  id: string;
+  type: InsightType;
+  theme: string;
+  title: string;
+  headline: string;
+  body: string;
+  action: string;
+  value_text: string;
+  delta_text: string | null;
+  delta: number | null;
+  series: { kind: "line" | "bar" | "share"; labels: string[]; values: number[]; texts: string[]; highlight: number | null };
+  confidence: number;
+  measure: string;
+  dimension: string | null;
+  sources: string[];
+  facts: Record<string, number>;
+  narrative_source: "template" | "ai";
+  pinned: boolean;
+  question_ids: string[];
+}
+
+export interface BusinessQuestion {
+  id: string;
+  text: string;
+  theme: string;
+  audience: string;
+  insight_ids: string[];
+  answer: string;
+  source: "template" | "ai";
+}
+
+export interface InsightPlan {
+  insights: Insight[];
+  questions: BusinessQuestion[];
+  north_star: string | null;
+  rows_scanned: number;
+  dimensions: string[];
+  confidence: number;
+  /** off = no key, available = AI phrasing not run yet, done / failed = see ai_note. */
+  ai_status: "off" | "available" | "done" | "failed";
+  ai_note: string | null;
+  pinned: string[];
+  notes: string[];
+}
+
+export interface AskResponse {
+  plan: InsightPlan;
+  asked: { question: string; spec: Record<string, unknown>; insight: Insight; source: "rules" | "ai" };
+}
+
 export class ApiError extends Error {}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -500,6 +553,23 @@ export function polishMeasure(id: string, name: string): Promise<MeasurePlan> {
 
 export function measuresTmdlUrl(id: string): string {
   return `${API_BASE_URL}/api/projects/${id}/measures/export.tmdl`;
+}
+
+/** ai=true also lets the LLM phrase the computed insights once (numbers are grounded server-side). */
+export function getInsights(id: string, ai: boolean): Promise<InsightPlan> {
+  return request(`/api/projects/${id}/insights?ai=${ai}`);
+}
+
+export function askQuestion(id: string, question: string): Promise<AskResponse> {
+  return postJson(`/api/projects/${id}/insights/ask`, { question });
+}
+
+export function pinInsight(id: string, insightId: string, pinned: boolean): Promise<InsightPlan> {
+  return postJson(`/api/projects/${id}/insights/pin`, { id: insightId, pinned });
+}
+
+export function deleteAsked(id: string, insightId: string): Promise<InsightPlan> {
+  return postJson(`/api/projects/${id}/insights/asked/delete`, { id: insightId });
 }
 
 export function getCleaningPreview(id: string, table: string): Promise<DiffPreview> {

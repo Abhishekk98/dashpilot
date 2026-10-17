@@ -30,7 +30,7 @@ export function AppFooter() {
   }, []);
 
   return (
-    <footer className="w-full px-8 py-6 relative z-10 flex flex-col sm:flex-row items-center justify-between gap-4">
+    <footer className="w-full px-8 py-6 relative z-10 flex flex-col sm:flex-row items-center justify-between gap-4 print:hidden">
       <div className="flex items-center gap-3">
         <div className="w-2 h-2 rounded-full bg-secondary-container" />
         <span className="font-label-md text-label-md text-on-surface-variant">

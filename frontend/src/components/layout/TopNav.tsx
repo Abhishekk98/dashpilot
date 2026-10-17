@@ -21,7 +21,7 @@ export function TopNav() {
   return (
     // Sticky inside the canvas; the canvas-coloured band behind the pill hides content
     // scrolling underneath, so nothing shows above or through the header.
-    <header className="sticky top-0 z-50 w-full px-4 md:px-8 pt-3 md:pt-4 pb-3 bg-linear-to-b from-canvas from-75% to-canvas/0">
+    <header className="sticky top-0 z-50 w-full px-4 md:px-8 pt-3 md:pt-4 pb-3 bg-linear-to-b from-canvas from-75% to-canvas/0 print:hidden">
       <div className="h-20 w-full px-4 md:px-6 rounded-full bg-surface-container-lowest/80 backdrop-blur-xl shadow-nav flex items-center justify-between gap-4">
         <Link href="/" className="flex items-center gap-3">
           <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-full bg-surface-container-low">
