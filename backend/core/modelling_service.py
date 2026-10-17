@@ -60,6 +60,13 @@ def save_settings(store: ProjectStore, project: Project, llm: LLMProvider | None
     return get_model(store, project, llm)
 
 
+def build_with_results(store: ProjectStore, project: Project, llm: LLMProvider | None):
+    """(model plan, {table: cleaned PipelineResult}) without waiting on the LLM."""
+    return _build(store, project, llm, run_ai=False)
+
+
 def tmdl_files(store: ProjectStore, project: Project, llm: LLMProvider | None) -> dict[str, str]:
+    from core.dax_service import valid_measures  # local import: dax_service builds on this module
+
     plan, results = _build(store, project, llm, run_ai=False)
-    return tmdl.build_files(plan, results, project.name)
+    return tmdl.build_files(plan, results, project.name, valid_measures(store, project, llm))

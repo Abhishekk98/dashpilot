@@ -1,0 +1,48 @@
+{
+  "industry": "Healthcare",
+  "kpis": [
+    {
+      "name": "Patients",
+      "kind": "distinct",
+      "format": "whole",
+      "description": "Number of distinct patients.",
+      "columns": "patient_id|mrn|patient_no",
+      "fallback": "count_rows"
+    },
+    {
+      "name": "Admissions",
+      "kind": "count_rows",
+      "format": "decimal",
+      "description": "Number of admissions or visits."
+    },
+    {
+      "name": "Average Length of Stay",
+      "kind": "average",
+      "format": "decimal",
+      "description": "Average days per stay.",
+      "columns": "length_of_stay|los|stay_days|days"
+    },
+    {
+      "name": "Readmission Rate",
+      "kind": "flag_rate",
+      "format": "percent",
+      "description": "Share of visits that were readmissions.",
+      "columns": "readmit|readmission|readmitted"
+    },
+    {
+      "name": "Total Billing",
+      "kind": "sum",
+      "format": "currency",
+      "description": "Total billed amount.",
+      "columns": "bill|billing|charge|amount|cost"
+    },
+    {
+      "name": "Billing per Patient",
+      "kind": "ratio",
+      "format": "currency",
+      "description": "Billed amount per patient.",
+      "numerator": "Total Billing",
+      "denominator": "Patients"
+    }
+  ]
+}

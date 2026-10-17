@@ -1,0 +1,49 @@
+{
+  "industry": "Manufacturing",
+  "kpis": [
+    {
+      "name": "Units Produced",
+      "kind": "sum",
+      "format": "whole",
+      "description": "Total units produced.",
+      "columns": "produced|output|quantity|qty|units"
+    },
+    {
+      "name": "Defects",
+      "kind": "sum",
+      "format": "whole",
+      "description": "Total defective units.",
+      "columns": "defect|rejected|scrap"
+    },
+    {
+      "name": "Defect Rate",
+      "kind": "ratio",
+      "format": "percent",
+      "description": "Defective units as a share of units produced.",
+      "numerator": "Defects",
+      "denominator": "Units Produced"
+    },
+    {
+      "name": "Downtime Hours",
+      "kind": "sum",
+      "format": "decimal",
+      "description": "Total machine downtime.",
+      "columns": "downtime"
+    },
+    {
+      "name": "Production Cost",
+      "kind": "sum",
+      "format": "currency",
+      "description": "Total production cost.",
+      "columns": "cost|expense"
+    },
+    {
+      "name": "Cost per Unit",
+      "kind": "ratio",
+      "format": "currency",
+      "description": "Production cost per unit produced.",
+      "numerator": "Production Cost",
+      "denominator": "Units Produced"
+    }
+  ]
+}

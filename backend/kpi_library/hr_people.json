@@ -1,0 +1,49 @@
+{
+  "industry": "HR & People",
+  "kpis": [
+    {
+      "name": "Headcount",
+      "kind": "distinct",
+      "format": "whole",
+      "description": "Number of distinct employees.",
+      "columns": "employee_id|emp_id|staff_id|employee_number|person_id",
+      "fallback": "count_rows"
+    },
+    {
+      "name": "Attrition Rate",
+      "kind": "flag_rate",
+      "format": "percent",
+      "description": "Share of employees who left.",
+      "columns": "attrition|left|terminated|exited|is_active"
+    },
+    {
+      "name": "Attrition Rate (Status)",
+      "kind": "value_rate",
+      "format": "percent",
+      "description": "Share of employees whose status shows they left.",
+      "columns": "status|employment_status|state",
+      "values": "left|terminat|resign|exit|inactive"
+    },
+    {
+      "name": "Average Tenure",
+      "kind": "average",
+      "format": "decimal",
+      "description": "Average years of service.",
+      "columns": "tenure|years_at|years_of_service|experience"
+    },
+    {
+      "name": "Average Salary",
+      "kind": "average",
+      "format": "currency",
+      "description": "Average salary.",
+      "columns": "salary|ctc|pay|compensation|monthly_income|income"
+    },
+    {
+      "name": "Total Payroll",
+      "kind": "sum",
+      "format": "currency",
+      "description": "Total salary cost.",
+      "columns": "salary|ctc|pay|compensation|monthly_income|income"
+    }
+  ]
+}

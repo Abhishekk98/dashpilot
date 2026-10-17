@@ -1,0 +1,48 @@
+{
+  "industry": "Education",
+  "kpis": [
+    {
+      "name": "Students",
+      "kind": "distinct",
+      "format": "whole",
+      "description": "Number of distinct students.",
+      "columns": "student_id|roll_no|learner_id|enrollment_id",
+      "fallback": "count_rows"
+    },
+    {
+      "name": "Enrolments",
+      "kind": "count_rows",
+      "format": "decimal",
+      "description": "Number of enrolment records."
+    },
+    {
+      "name": "Average Score",
+      "kind": "average",
+      "format": "decimal",
+      "description": "Average score or marks.",
+      "columns": "score|marks|grade_points|gpa|percentage"
+    },
+    {
+      "name": "Pass Rate",
+      "kind": "value_rate",
+      "format": "percent",
+      "description": "Share of results that passed.",
+      "columns": "result|status|outcome",
+      "values": "pass"
+    },
+    {
+      "name": "Pass Rate (Flag)",
+      "kind": "flag_rate",
+      "format": "percent",
+      "description": "Share of students flagged as passed.",
+      "columns": "passed|is_pass"
+    },
+    {
+      "name": "Average Attendance",
+      "kind": "average",
+      "format": "percent",
+      "description": "Average attendance.",
+      "columns": "attendance"
+    }
+  ]
+}

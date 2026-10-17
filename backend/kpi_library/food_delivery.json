@@ -1,0 +1,57 @@
+{
+  "industry": "Food Delivery",
+  "kpis": [
+    {
+      "name": "Total Orders",
+      "kind": "distinct",
+      "format": "whole",
+      "description": "Number of distinct delivery orders.",
+      "columns": "order_id|order_no|order_number|invoice|bill_no|receipt|txn_id|transaction_id",
+      "fallback": "count_rows"
+    },
+    {
+      "name": "Gross Merchandise Value",
+      "kind": "sum",
+      "format": "currency",
+      "description": "Total order value before fees and discounts.",
+      "columns": "revenue|sales|gross|amount|net_sales|total_price|sale_value|order_value|gmv|value"
+    },
+    {
+      "name": "Average Order Value",
+      "kind": "ratio",
+      "format": "currency",
+      "description": "Order value per order.",
+      "numerator": "Gross Merchandise Value",
+      "denominator": "Total Orders"
+    },
+    {
+      "name": "Average Delivery Time",
+      "kind": "average",
+      "format": "decimal",
+      "description": "Average minutes from order to delivery.",
+      "columns": "delivery_time|delivery_min|duration|eta|time_taken|delivery_duration"
+    },
+    {
+      "name": "Total Tips",
+      "kind": "sum",
+      "format": "currency",
+      "description": "Total tips given to couriers.",
+      "columns": "tip"
+    },
+    {
+      "name": "Cancellation Rate",
+      "kind": "value_rate",
+      "format": "percent",
+      "description": "Share of orders that were cancelled.",
+      "columns": "status|order_status|state",
+      "values": "cancel"
+    },
+    {
+      "name": "Late Delivery Rate",
+      "kind": "flag_rate",
+      "format": "percent",
+      "description": "Share of orders delivered late.",
+      "columns": "late|delayed|is_late"
+    }
+  ]
+}

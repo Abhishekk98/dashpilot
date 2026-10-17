@@ -7,7 +7,7 @@ import { PIPELINE_STEPS, findStep } from "@/lib/steps";
 export const dynamicParams = false;
 
 // Steps with their own route folder (e.g. /project/upload) are excluded here.
-const BUILT_STEPS = new Set(["upload", "clean", "context", "model", "design-method"]);
+const BUILT_STEPS = new Set(["upload", "clean", "context", "model", "kpis", "design-method"]);
 
 export function generateStaticParams() {
   return PIPELINE_STEPS.filter((s) => !BUILT_STEPS.has(s.slug)).map((s) => ({ step: s.slug }));

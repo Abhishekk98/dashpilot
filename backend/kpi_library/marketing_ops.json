@@ -1,0 +1,72 @@
+{
+  "industry": "Marketing Ops",
+  "kpis": [
+    {
+      "name": "Total Spend",
+      "kind": "sum",
+      "format": "currency",
+      "description": "Total marketing spend.",
+      "columns": "spend|cost|budget|amount_spent"
+    },
+    {
+      "name": "Impressions",
+      "kind": "sum",
+      "format": "whole",
+      "description": "Total ad impressions.",
+      "columns": "impression|views|reach"
+    },
+    {
+      "name": "Clicks",
+      "kind": "sum",
+      "format": "whole",
+      "description": "Total clicks.",
+      "columns": "click"
+    },
+    {
+      "name": "Click-Through Rate",
+      "kind": "ratio",
+      "format": "percent",
+      "description": "Clicks per impression.",
+      "numerator": "Clicks",
+      "denominator": "Impressions"
+    },
+    {
+      "name": "Cost per Click",
+      "kind": "ratio",
+      "format": "currency",
+      "description": "Spend per click.",
+      "numerator": "Total Spend",
+      "denominator": "Clicks"
+    },
+    {
+      "name": "Conversions",
+      "kind": "sum",
+      "format": "whole",
+      "description": "Total conversions or leads.",
+      "columns": "conversion|leads|signups|purchases"
+    },
+    {
+      "name": "Conversion Rate",
+      "kind": "ratio",
+      "format": "percent",
+      "description": "Conversions per click.",
+      "numerator": "Conversions",
+      "denominator": "Clicks"
+    },
+    {
+      "name": "Attributed Revenue",
+      "kind": "sum",
+      "format": "currency",
+      "description": "Revenue attributed to campaigns.",
+      "columns": "revenue|sales|value"
+    },
+    {
+      "name": "Return on Ad Spend",
+      "kind": "ratio",
+      "format": "decimal",
+      "description": "Attributed revenue per unit of spend.",
+      "numerator": "Attributed Revenue",
+      "denominator": "Total Spend"
+    }
+  ]
+}

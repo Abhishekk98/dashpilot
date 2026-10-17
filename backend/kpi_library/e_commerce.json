@@ -1,0 +1,73 @@
+{
+  "industry": "E-commerce",
+  "kpis": [
+    {
+      "name": "Total Revenue",
+      "kind": "sum",
+      "format": "currency",
+      "description": "Gross merchandise value of all orders.",
+      "columns": "revenue|sales|gross|amount|net_sales|total_price|sale_value|order_value|gmv|value"
+    },
+    {
+      "name": "Total Orders",
+      "kind": "distinct",
+      "format": "whole",
+      "description": "Number of distinct orders.",
+      "columns": "order_id|order_no|order_number|invoice|bill_no|receipt|txn_id|transaction_id",
+      "fallback": "count_rows"
+    },
+    {
+      "name": "Average Order Value",
+      "kind": "ratio",
+      "format": "currency",
+      "description": "Revenue per order; the core basket-size KPI.",
+      "numerator": "Total Revenue",
+      "denominator": "Total Orders"
+    },
+    {
+      "name": "Units Sold",
+      "kind": "sum",
+      "format": "whole",
+      "description": "Total quantity of items ordered.",
+      "columns": "quantity|qty|units|unit_count|items"
+    },
+    {
+      "name": "Unique Customers",
+      "kind": "distinct",
+      "format": "whole",
+      "description": "Number of distinct buying customers.",
+      "columns": "customer_id|client_id|account_id|user_id|member_id|buyer_id"
+    },
+    {
+      "name": "Orders per Customer",
+      "kind": "ratio",
+      "format": "decimal",
+      "description": "Average number of orders each customer placed.",
+      "numerator": "Total Orders",
+      "denominator": "Unique Customers"
+    },
+    {
+      "name": "Cancellation Rate",
+      "kind": "value_rate",
+      "format": "percent",
+      "description": "Share of orders that were cancelled.",
+      "columns": "status|fulfil|order_status|state",
+      "values": "cancel"
+    },
+    {
+      "name": "Return Rate",
+      "kind": "value_rate",
+      "format": "percent",
+      "description": "Share of orders that were returned.",
+      "columns": "status|fulfil|order_status|state|return",
+      "values": "return|refund"
+    },
+    {
+      "name": "Total Discount",
+      "kind": "sum",
+      "format": "currency",
+      "description": "Total discount amount given (only when stored as an amount).",
+      "columns": "discount_amount|discount_value|coupon_amount"
+    }
+  ]
+}

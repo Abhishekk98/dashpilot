@@ -1,0 +1,50 @@
+{
+  "industry": "SaaS & Subscription",
+  "kpis": [
+    {
+      "name": "Monthly Recurring Revenue",
+      "kind": "sum",
+      "format": "currency",
+      "description": "Recurring revenue in the period.",
+      "columns": "mrr|recurring|revenue|amount|price|fee"
+    },
+    {
+      "name": "Active Subscriptions",
+      "kind": "distinct",
+      "format": "whole",
+      "description": "Number of distinct subscriptions or accounts.",
+      "columns": "subscription_id|account_id|customer_id|tenant_id|user_id",
+      "fallback": "count_rows"
+    },
+    {
+      "name": "Average Revenue per Account",
+      "kind": "ratio",
+      "format": "currency",
+      "description": "Recurring revenue per subscription.",
+      "numerator": "Monthly Recurring Revenue",
+      "denominator": "Active Subscriptions"
+    },
+    {
+      "name": "Churn Rate",
+      "kind": "flag_rate",
+      "format": "percent",
+      "description": "Share of subscriptions that churned.",
+      "columns": "churn|churned|is_churn|cancelled"
+    },
+    {
+      "name": "Cancellation Rate",
+      "kind": "value_rate",
+      "format": "percent",
+      "description": "Share of subscriptions with a cancelled status.",
+      "columns": "status|state|plan_status",
+      "values": "cancel|churn"
+    },
+    {
+      "name": "Total Seats",
+      "kind": "sum",
+      "format": "whole",
+      "description": "Total licensed seats.",
+      "columns": "seats|licenses|users"
+    }
+  ]
+}

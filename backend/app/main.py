@@ -3,7 +3,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import context, health, llm, model, projects
+from app.api.routes import context, health, llm, measures, model, projects
 from app.config import get_settings
 
 
@@ -24,6 +24,7 @@ def create_app() -> FastAPI:
     app.include_router(projects.router, prefix="/api")
     app.include_router(context.router, prefix="/api")
     app.include_router(model.router, prefix="/api")
+    app.include_router(measures.router, prefix="/api")
     app.include_router(llm.router, prefix="/api")
     return app
 

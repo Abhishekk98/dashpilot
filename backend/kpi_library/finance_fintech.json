@@ -1,0 +1,73 @@
+{
+  "industry": "Finance & FinTech",
+  "kpis": [
+    {
+      "name": "Transaction Volume",
+      "kind": "sum",
+      "format": "currency",
+      "description": "Total value of all transactions.",
+      "columns": "amount|value|txn_amount|transaction_amount|payment|revenue"
+    },
+    {
+      "name": "Transaction Count",
+      "kind": "distinct",
+      "format": "whole",
+      "description": "Number of distinct transactions.",
+      "columns": "txn_id|transaction_id|payment_id|order_id|reference",
+      "fallback": "count_rows"
+    },
+    {
+      "name": "Average Transaction Value",
+      "kind": "ratio",
+      "format": "currency",
+      "description": "Average value of a single transaction.",
+      "numerator": "Transaction Volume",
+      "denominator": "Transaction Count"
+    },
+    {
+      "name": "Active Customers",
+      "kind": "distinct",
+      "format": "whole",
+      "description": "Number of distinct customers or accounts that transacted.",
+      "columns": "customer_id|account_id|client_id|card_id|user_id"
+    },
+    {
+      "name": "Fraud Rate",
+      "kind": "flag_rate",
+      "format": "percent",
+      "description": "Share of transactions flagged as fraud.",
+      "columns": "fraud|is_fraud|fraudulent|suspicious"
+    },
+    {
+      "name": "Fraud Amount",
+      "kind": "flag_sum",
+      "format": "currency",
+      "description": "Value of transactions flagged as fraud.",
+      "columns": "fraud|is_fraud|fraudulent|suspicious",
+      "measure": "Transaction Volume"
+    },
+    {
+      "name": "Failure Rate",
+      "kind": "value_rate",
+      "format": "percent",
+      "description": "Share of transactions that failed or were declined.",
+      "columns": "status|state|result|outcome",
+      "values": "fail|declin|reject|error"
+    },
+    {
+      "name": "Reversal Rate",
+      "kind": "value_rate",
+      "format": "percent",
+      "description": "Share of transactions that were reversed, refunded or charged back.",
+      "columns": "status|state|result|outcome",
+      "values": "revers|refund|chargeback"
+    },
+    {
+      "name": "Total Credit Limit",
+      "kind": "sum",
+      "format": "currency",
+      "description": "Sum of credit limits across customers.",
+      "columns": "credit_limit|limit"
+    }
+  ]
+}

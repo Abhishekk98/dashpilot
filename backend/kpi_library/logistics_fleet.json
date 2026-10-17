@@ -1,0 +1,57 @@
+{
+  "industry": "Logistics & Fleet",
+  "kpis": [
+    {
+      "name": "Shipments",
+      "kind": "distinct",
+      "format": "whole",
+      "description": "Number of distinct shipments.",
+      "columns": "shipment_id|consignment|awb|tracking|order_id|trip_id",
+      "fallback": "count_rows"
+    },
+    {
+      "name": "On-Time Delivery Rate",
+      "kind": "flag_rate",
+      "format": "percent",
+      "description": "Share of shipments delivered on time.",
+      "columns": "on_time|ontime|is_on_time"
+    },
+    {
+      "name": "Delivered Rate",
+      "kind": "value_rate",
+      "format": "percent",
+      "description": "Share of shipments with a delivered status.",
+      "columns": "status|delivery_status|state",
+      "values": "deliver"
+    },
+    {
+      "name": "Average Transit Time",
+      "kind": "average",
+      "format": "decimal",
+      "description": "Average transit time per shipment.",
+      "columns": "transit|delivery_days|lead_time|duration|days"
+    },
+    {
+      "name": "Freight Cost",
+      "kind": "sum",
+      "format": "currency",
+      "description": "Total freight or shipping cost.",
+      "columns": "freight|shipping_cost|cost|charge"
+    },
+    {
+      "name": "Cost per Shipment",
+      "kind": "ratio",
+      "format": "currency",
+      "description": "Freight cost per shipment.",
+      "numerator": "Freight Cost",
+      "denominator": "Shipments"
+    },
+    {
+      "name": "Total Distance",
+      "kind": "sum",
+      "format": "decimal",
+      "description": "Total distance travelled.",
+      "columns": "distance|km|miles"
+    }
+  ]
+}

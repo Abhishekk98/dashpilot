@@ -1,0 +1,81 @@
+{
+  "industry": "Retail",
+  "kpis": [
+    {
+      "name": "Total Revenue",
+      "kind": "sum",
+      "format": "currency",
+      "description": "Total sales value of all transactions in the current filter context.",
+      "columns": "revenue|sales|gross|amount|net_sales|total_price|sale_value|order_value|gmv|value"
+    },
+    {
+      "name": "Total Orders",
+      "kind": "distinct",
+      "format": "whole",
+      "description": "Number of distinct orders (falls back to row count when there is no order ID).",
+      "columns": "order_id|order_no|order_number|invoice|bill_no|receipt|txn_id|transaction_id",
+      "fallback": "count_rows"
+    },
+    {
+      "name": "Average Order Value",
+      "kind": "ratio",
+      "format": "currency",
+      "description": "Revenue per order; zero-safe when there are no orders.",
+      "numerator": "Total Revenue",
+      "denominator": "Total Orders"
+    },
+    {
+      "name": "Units Sold",
+      "kind": "sum",
+      "format": "whole",
+      "description": "Total quantity of items sold.",
+      "columns": "quantity|qty|units|unit_count|items"
+    },
+    {
+      "name": "Average Selling Price",
+      "kind": "ratio",
+      "format": "currency",
+      "description": "Revenue per unit sold.",
+      "numerator": "Total Revenue",
+      "denominator": "Units Sold"
+    },
+    {
+      "name": "Total Cost",
+      "kind": "sum",
+      "format": "currency",
+      "description": "Total cost of goods sold.",
+      "columns": "cost|cogs|cost_price|purchase_price|unit_cost"
+    },
+    {
+      "name": "Gross Profit",
+      "kind": "difference",
+      "format": "currency",
+      "description": "Revenue minus cost of goods sold.",
+      "a": "Total Revenue",
+      "b": "Total Cost"
+    },
+    {
+      "name": "Gross Margin %",
+      "kind": "ratio",
+      "format": "percent",
+      "description": "Share of revenue kept after cost of goods sold.",
+      "numerator": "Gross Profit",
+      "denominator": "Total Revenue"
+    },
+    {
+      "name": "Return Rate",
+      "kind": "value_rate",
+      "format": "percent",
+      "description": "Share of orders that were returned or refunded.",
+      "columns": "status|return|order_status|fulfil",
+      "values": "return|refund"
+    },
+    {
+      "name": "Unique Customers",
+      "kind": "distinct",
+      "format": "whole",
+      "description": "Number of distinct customers who bought.",
+      "columns": "customer_id|client_id|account_id|user_id|member_id|buyer_id"
+    }
+  ]
+}

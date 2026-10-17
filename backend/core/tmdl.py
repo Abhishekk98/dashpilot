@@ -150,12 +150,39 @@ def model_folder(project_name: str) -> str:
     return (re.sub(r"[^0-9A-Za-z_-]+", "_", project_name).strip("_") or "DashPilot") + ".SemanticModel"
 
 
-def build_files(plan: ModelPlan, cleaned: dict[str, PipelineResult], project_name: str) -> dict[str, str]:
+MEASURES_TABLE = "_Measures"
+
+
+def measures_table(measures) -> str:
+    """A measure-only table: one hidden placeholder column, every measure with folder/format/description."""
+    blocks = []
+    for m in measures:
+        lines = [f"\t/// {line}" for line in (m.description or "").splitlines() if line.strip()]
+        expression = m.expression.strip()
+        if "\n" in expression:
+            lines.append(f"\tmeasure {name(m.name)} =")
+            lines += ["\t\t\t" + line for line in expression.splitlines()]
+        else:
+            lines.append(f"\tmeasure {name(m.name)} = {expression}")
+        lines.append(f"\t\tformatString: {m.format_string}")
+        lines.append(f"\t\tdisplayFolder: {m.folder}")
+        lines.append(f"\t\tlineageTag: {_tag(MEASURES_TABLE, m.name)}")
+        blocks.append("\n".join(lines))
+    body = "\n\n".join(blocks)
+    return (
+        f"table {MEASURES_TABLE}\n\tlineageTag: {_tag(MEASURES_TABLE)}\n\n{body}\n\n"
+        f"\tcolumn Column\n\t\tdataType: string\n\t\tisHidden\n\t\tlineageTag: {_tag(MEASURES_TABLE, 'Column')}\n"
+        f"\t\tsummarizeBy: none\n\t\tsourceColumn: Column\n\n"
+        f"\tpartition {MEASURES_TABLE} = m\n\t\tmode: import\n\t\tsource = #table(type table [Column = text], {{}})\n"
+    )
+
+
+def build_files(plan: ModelPlan, cleaned: dict[str, PipelineResult], project_name: str, measures=None) -> dict[str, str]:
     """{relative path: content} for the {Project}.SemanticModel folder (included tables only)."""
     root = model_folder(project_name)
     d = f"{root}/definition"
     included = [t for t in plan.tables if t.included]
-    refs = [t.name for t in included] + ([DATE_TABLE] if plan.date_table.enabled else [])
+    refs = [t.name for t in included] + ([DATE_TABLE] if plan.date_table.enabled else []) + ([MEASURES_TABLE] if measures else [])
     files = {
         f"{root}/definition.pbism": '{\n  "version": "4.0",\n  "settings": {}\n}\n',
         f"{d}/database.tmdl": "database\n\tcompatibilityLevel: 1600\n",
@@ -175,6 +202,8 @@ def build_files(plan: ModelPlan, cleaned: dict[str, PipelineResult], project_nam
         files[f"{d}/tables/{t.name}.tmdl"] = _table(t, m_script)
     if plan.date_table.enabled:
         files[f"{d}/tables/{DATE_TABLE}.tmdl"] = _date_table(plan)
+    if measures:
+        files[f"{d}/tables/{MEASURES_TABLE}.tmdl"] = measures_table(measures)
     return files
 
 

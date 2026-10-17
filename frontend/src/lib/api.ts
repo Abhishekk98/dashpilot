@@ -295,6 +295,53 @@ export interface ModelPlan {
   tmdl_errors: string[];
 }
 
+export type MeasureFormat = "currency" | "whole" | "decimal" | "percent";
+
+export interface MeasureInput {
+  name: string;
+  expression: string;
+  format: MeasureFormat;
+  folder: string;
+  description: string;
+}
+
+export interface Measure extends MeasureInput {
+  format_string: string;
+  source: "library" | "rules" | "ai" | "user";
+  edited: boolean;
+  /** passed = valid and calculated; edge = valid but not computable here / blank; error = rejected by the validator. */
+  status: "passed" | "edge" | "error";
+  issues: string[];
+  deps: string[];
+  time_intelligence: boolean;
+  value: number | null;
+  value_text: string | null;
+  test_context: string | null;
+  industry: string | null;
+}
+
+export interface KpiCard {
+  name: string;
+  value_text: string;
+  badge: string;
+  accent: boolean;
+  spark: number[];
+}
+
+export interface MeasurePlan {
+  measures: Measure[];
+  folders: Record<string, number>;
+  cards: KpiCard[];
+  passed: number;
+  edge: number;
+  errors: number;
+  primary_fact: string | null;
+  test_context: string | null;
+  industries: string[];
+  notes: string[];
+  ai_status: "off" | "available";
+}
+
 export class ApiError extends Error {}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -419,6 +466,40 @@ export function tmdlZipUrl(id: string): string {
 /** AI pass that finds synonyms (M → Male, Bombay → Mumbai); results become reviewable suggestions. */
 export function scanSynonyms(id: string): Promise<CleaningPlan> {
   return request(`/api/projects/${id}/cleaning/synonyms`, { method: "POST" });
+}
+
+export function getMeasures(id: string): Promise<MeasurePlan> {
+  return request(`/api/projects/${id}/measures`);
+}
+
+/** Create a measure, or update one when `originalName` is given (generated measures keep their name). */
+export function saveMeasure(id: string, measure: MeasureInput, originalName?: string): Promise<MeasurePlan> {
+  return postJson(`/api/projects/${id}/measures`, { measure, original_name: originalName ?? null });
+}
+
+export function deleteMeasure(id: string, name: string): Promise<MeasurePlan> {
+  return postJson(`/api/projects/${id}/measures/delete`, { name });
+}
+
+/** "Regenerate": drop the user's edits to a generated measure. */
+export function resetMeasure(id: string, name: string): Promise<MeasurePlan> {
+  return postJson(`/api/projects/${id}/measures/reset`, { name });
+}
+
+export function validateMeasures(id: string): Promise<MeasurePlan> {
+  return postJson(`/api/projects/${id}/measures/validate`);
+}
+
+export function suggestMeasures(id: string): Promise<MeasurePlan> {
+  return postJson(`/api/projects/${id}/measures/suggest`);
+}
+
+export function polishMeasure(id: string, name: string): Promise<MeasurePlan> {
+  return postJson(`/api/projects/${id}/measures/polish`, { name });
+}
+
+export function measuresTmdlUrl(id: string): string {
+  return `${API_BASE_URL}/api/projects/${id}/measures/export.tmdl`;
 }
 
 export function getCleaningPreview(id: string, table: string): Promise<DiffPreview> {
