@@ -1,0 +1,11 @@
+# Runtime dependencies for the DashPilot API (Python 3.11)
+fastapi==0.143.3
+uvicorn[standard]==0.54.0
+pydantic-settings==2.16.0
+python-multipart==0.0.32
+pandas==3.0.6
+openpyxl==3.1.5
+
+# LLM providers (only backend/llm/ may import these)
+google-genai==2.31.0
+anthropic==1.15.0

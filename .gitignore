@@ -1,0 +1,25 @@
+# Dependencies / build output
+node_modules/
+.next/
+out/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Local env files (keep the .env.example files)
+.env
+.env.local
+.env.*.local
+
+# Generated projects and uploads
+backend/output/*
+!backend/output/.gitkeep
+backend/storage/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+*.tsbuildinfo
+next-env.d.ts
