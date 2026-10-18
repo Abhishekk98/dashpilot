@@ -16,7 +16,7 @@ from core.dax import GenContext, StoredMeasures
 from core.dax import build_plan as build_measures
 from core.dax_eval import date_frame
 from core.design_ai import generate_variant, generate_variants, template_html
-from core.design_contract import check, measure_static
+from core.design_contract import check, measure_playwright, measure_static, playwright_available
 from core.insights import Engine, InsightPlan, compute_insights, link_questions, template_questions
 from core.modelling import DATE_TABLE, ModelSettings, build_model
 from core.planner import (
@@ -193,6 +193,22 @@ def test_contract_requires_exact_visible_titles_and_insights(shop):
     errors = check(retitled, plan, prefer_browser=False)[0] + check(reworded, plan, prefer_browser=False)[0]
     assert any(f"{chart.id} must show its title" in e for e in errors)
     assert any("word for word" in e for e in errors)
+
+
+def test_browser_render_catches_css_layout_changes(shop):
+    if not playwright_available():
+        pytest.skip("playwright not installed")
+    plan = shop[0]
+    html = template_html(plan, CTX, "glassmorphism")
+    try:
+        m = measure_playwright(html)
+    except Exception as exc:  # no Edge/Chrome on this machine
+        pytest.skip(f"no browser: {exc}")
+    static = {b.id: (b.x, b.y, b.w, b.h) for b in measure_static(html).boxes}
+    assert m.engine == "playwright" and {b.id: (round(b.x), round(b.y), round(b.w), round(b.h)) for b in m.boxes} == static
+    moved = html.replace("</style>", ".dp-visual{transform:translateX(900px)}</style>")
+    errors, m = check(moved, plan)  # inline styles are unchanged, only the real render sees this
+    assert m.engine == "playwright" and any("outside the 1280x720 canvas" in e for e in errors)
 
 
 def test_static_measure_ignores_padding_properties():

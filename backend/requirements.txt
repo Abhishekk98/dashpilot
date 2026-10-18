@@ -5,6 +5,8 @@ pydantic-settings==2.16.0
 python-multipart==0.0.32
 pandas==3.0.6
 openpyxl==3.1.5
+# Design contract rendering; drives the installed Edge/Chrome (no browser download needed)
+playwright==1.64.0
 
 # LLM providers (only backend/llm/ may import these)
 google-genai==2.31.0
