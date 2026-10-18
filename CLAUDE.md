@@ -41,7 +41,8 @@ backend/
   app/                     # FastAPI: main.py (app factory), config.py (settings), api/routes/
   core/                    # one module per spec module: upload, profiling, cleaning, context, modelling,
                            # dax, insights, planner, stitch_prompt, design_import, pbip_builder, validator
-                           # (planned: design_ai, design_style, design_contract — see "Dashboard design methods")
+                           # + planner_service, design_ai (method B), design_contract (shared render/measure +
+                           #   contract checks, reuse in Design Import); planned: design_style (method C)
   llm/                     # base.py (LLMProvider interface, errors, retry), gemini.py, claude.py,
                            # factory.py (picks provider from LLM_PROVIDER), prompts/
   templates/               # tmdl/, visuals/, themes/ for the PBIP builder

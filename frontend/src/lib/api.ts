@@ -395,6 +395,78 @@ export interface AskResponse {
   asked: { question: string; spec: Record<string, unknown>; insight: Insight; source: "rules" | "ai" };
 }
 
+export type PlanRole = "slicer" | "kpi" | "chart" | "insights";
+export type SortOrder = "desc" | "asc" | "date";
+
+/** Editable part of a planned visual (layout boxes are always recomputed by the server). */
+export interface VisualInput {
+  role: PlanRole;
+  type: string;
+  title: string;
+  measures: string[];
+  dimension: string | null;
+  sort: SortOrder | null;
+  purpose: string;
+  question_id: string | null;
+  text: string[];
+}
+
+export interface PlanVisual extends VisualInput {
+  id: string;
+  box: { x: number; y: number; w: number; h: number };
+}
+
+export interface DimensionOption {
+  field: string;
+  label: string;
+  kind: "date" | "category" | "geo";
+  cardinality: number;
+}
+
+export interface DashboardPlan {
+  title: string;
+  subtitle: string;
+  width: number;
+  height: number;
+  visuals: PlanVisual[];
+  source: "rules" | "ai";
+  edited: boolean;
+  issues: string[];
+  valid: boolean;
+  measures: string[];
+  dimensions: DimensionOption[];
+  chart_types: string[];
+}
+
+export type DesignStyle = "dark_futuristic" | "light_elegant" | "glassmorphism";
+
+export interface DesignVariant {
+  id: DesignStyle;
+  label: string;
+  html: string;
+  source: "ai" | "template";
+  attempts: number;
+  errors: string[];
+  valid: boolean;
+  engine: string;
+  note: string | null;
+}
+
+export interface DesignState {
+  variants: DesignVariant[];
+  selected: DesignStyle | null;
+  plan_signature: string | null;
+  /** The plan changed after these variants were generated. */
+  stale: boolean;
+  generated_at: string | null;
+}
+
+export interface PlanResponse {
+  plan: DashboardPlan;
+  design: DesignState;
+  notes: string[];
+}
+
 export class ApiError extends Error {}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -570,6 +642,31 @@ export function pinInsight(id: string, insightId: string, pinned: boolean): Prom
 
 export function deleteAsked(id: string, insightId: string): Promise<InsightPlan> {
   return postJson(`/api/projects/${id}/insights/asked/delete`, { id: insightId });
+}
+
+export function getDashboardPlan(id: string): Promise<PlanResponse> {
+  return request(`/api/projects/${id}/plan`);
+}
+
+/** Rebuild the plan from the current measures and insights; ai=true lets the LLM polish titles. */
+export function regeneratePlan(id: string, ai: boolean): Promise<PlanResponse> {
+  return postJson(`/api/projects/${id}/plan/generate?ai=${ai}`);
+}
+
+export function saveDashboardPlan(id: string, visuals: VisualInput[], title: string): Promise<PlanResponse> {
+  return request(`/api/projects/${id}/plan`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title, visuals }),
+  });
+}
+
+export function generateDesigns(id: string): Promise<PlanResponse> {
+  return postJson(`/api/projects/${id}/design/variants`);
+}
+
+export function selectDesign(id: string, variant: DesignStyle): Promise<PlanResponse> {
+  return postJson(`/api/projects/${id}/design/select`, { id: variant });
 }
 
 export function getCleaningPreview(id: string, table: string): Promise<DiffPreview> {

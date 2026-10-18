@@ -1,0 +1,121 @@
+"""Glue between stored projects, the dashboard planner and design method B (keeps routes thin)."""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timezone
+
+from pydantic import BaseModel
+
+from core.context_service import get_context
+from core.dax import StoredMeasures, build_plan as build_measures
+from core.dax_service import FILE as MEASURES_FILE
+from core.dax_service import gen_context
+from core.design_ai import DesignVariant, generate_variants, plan_signature
+from core.insights_service import get_insights
+from core.planner import DashboardPlan, VisualInput, ai_note, ai_refine, apply_edit, build_plan, dimension_options, finish
+from core.projects import Project, ProjectStore
+from llm import LLMProvider
+
+logger = logging.getLogger(__name__)
+PLAN_FILE = "plan.json"
+DESIGN_FILE = "design.json"
+
+
+class PlanError(ValueError):
+    """User-facing problem (no measures yet, unknown variant)."""
+
+
+class DesignState(BaseModel):
+    variants: list[DesignVariant] = []
+    selected: str | None = None
+    plan_signature: str | None = None
+    stale: bool = False  # the plan changed after these variants were generated
+    generated_at: datetime | None = None
+
+
+class PlanResponse(BaseModel):
+    plan: DashboardPlan
+    design: DesignState
+    notes: list[str] = []
+
+
+def _inputs(store: ProjectStore, project: Project, llm: LLMProvider | None):
+    ctx = gen_context(store, project, llm)
+    stored = StoredMeasures.model_validate(store.read_json(project.id, MEASURES_FILE))
+    mplan, measures = build_measures(ctx, stored, llm is not None)
+    if not any(m.status == "passed" for m in measures):
+        raise PlanError("No validated measures yet. Finish KPIs & DAX first.")
+    return ctx, mplan, measures
+
+
+def _design(store: ProjectStore, project: Project, plan: DashboardPlan) -> DesignState:
+    state = DesignState.model_validate(store.read_json(project.id, DESIGN_FILE))
+    state.stale = bool(state.variants) and state.plan_signature != plan_signature(plan)
+    return state
+
+
+def get_plan(store: ProjectStore, project: Project, llm: LLMProvider | None, regenerate: bool = False, ai: bool = False) -> PlanResponse:
+    ctx, mplan, measures = _inputs(store, project, llm)
+    dims = dimension_options(ctx.model, ctx.report)
+    stored = store.read_json(project.id, PLAN_FILE)
+    notes: list[str] = []
+    if stored.get("plan") and not regenerate:
+        plan = finish(DashboardPlan.model_validate(stored["plan"]), measures, dims)  # re-validate against today's measures
+    else:
+        context = get_context(store, project)
+        insights = get_insights(store, project, llm)
+        title = f"{context.company_name or project.name} Performance Dashboard"[:80]
+        plan = build_plan(title, ctx.model, ctx.report, measures, [c.name for c in mplan.cards], insights)
+        if ai and llm is not None:
+            try:
+                plan, changed = ai_refine(plan, context.industries, context.audiences, context.goals, llm)
+                plan = finish(plan, measures, dims)
+                notes.append(f"AI refined {changed} title{'s' if changed != 1 else ''} and purposes.")
+            except Exception as exc:  # titles are optional polish; rules stay
+                logger.warning("Planner AI refinement skipped: %s", exc)
+                notes.append(f"AI title polish skipped ({ai_note(exc)}); rule-based titles kept.")
+        store.write_json(project.id, PLAN_FILE, {"plan": plan.model_dump(mode="json")})
+    return PlanResponse(plan=plan, design=_design(store, project, plan), notes=notes)
+
+
+def save_plan(store: ProjectStore, project: Project, llm: LLMProvider | None, items: list[VisualInput], title: str | None) -> PlanResponse:
+    stored = store.read_json(project.id, PLAN_FILE)
+    if not stored.get("plan"):
+        get_plan(store, project, llm)  # first save before any plan existed: build one for its title/subtitle
+        stored = store.read_json(project.id, PLAN_FILE)
+    ctx, _, measures = _inputs(store, project, llm)
+    dims = dimension_options(ctx.model, ctx.report)
+    plan = apply_edit(DashboardPlan.model_validate(stored["plan"]), items, measures, dims, title)
+    store.write_json(project.id, PLAN_FILE, {"plan": plan.model_dump(mode="json")})
+    return PlanResponse(plan=plan, design=_design(store, project, plan))
+
+
+def generate_design(store: ProjectStore, project: Project, llm: LLMProvider | None) -> PlanResponse:
+    response = get_plan(store, project, llm)
+    plan = response.plan
+    if not plan.valid:
+        raise PlanError("Fix the dashboard plan first: " + "; ".join(plan.issues[:3]))
+    context = get_context(store, project)
+    variants = generate_variants(plan, context, llm)
+    state = DesignState(variants=variants, plan_signature=plan_signature(plan), generated_at=datetime.now(timezone.utc))
+    store.write_json(project.id, DESIGN_FILE, state.model_dump(mode="json"))
+    ai = sum(v.source == "ai" for v in variants)
+    notes = [f"{ai} of {len(variants)} variants designed by AI; {len(variants) - ai} from built-in templates."]
+    notes += [f"{v.label}: {v.note}" for v in variants if v.note]
+    return PlanResponse(plan=plan, design=state, notes=notes)
+
+
+def select_variant(store: ProjectStore, project: Project, llm: LLMProvider | None, variant_id: str) -> PlanResponse:
+    response = get_plan(store, project, llm)
+    state = response.design
+    chosen = next((v for v in state.variants if v.id == variant_id), None)
+    if chosen is None:
+        raise PlanError(f"Unknown design variant {variant_id}; generate the variants first.")
+    state.selected = variant_id
+    store.write_json(project.id, DESIGN_FILE, state.model_dump(mode="json", exclude={"stale"}))
+    # The chosen page is what Design Import (Step 8) reads.
+    path = store.project_dir(project.id) / "design" / "selected.html"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(chosen.html, encoding="utf-8")
+    return PlanResponse(plan=response.plan, design=state)
