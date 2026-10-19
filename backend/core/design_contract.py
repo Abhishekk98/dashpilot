@@ -12,14 +12,17 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
+from typing import Any, TypeVar
 
 from core.planner import CANVAS_H, CANVAS_W, DashboardPlan
 
 logger = logging.getLogger(__name__)
 
 ALLOWED_HOSTS = ("fonts.googleapis.com", "fonts.gstatic.com")
+T = TypeVar("T")
 
 
 @dataclass
@@ -127,11 +130,19 @@ def playwright_available() -> bool:
     return True
 
 
-def measure_playwright(html: str) -> Measurement:
-    """Render in a headless installed browser (Edge, then Chrome, then Playwright's Chromium)."""
+SCRIPT_HOSTS = ("cdn.tailwindcss.com",)  # Stitch exports style themselves with the Tailwind CDN
+
+
+def render_page(html: str, work: Callable[[Any], T], allow_scripts: bool = False) -> T:
+    """Open `html` at 1280x720 in a headless installed browser (Edge, then Chrome, then Playwright's
+    Chromium) and return `work(page)`. Network is limited to the font hosts (and, with allow_scripts,
+    the Tailwind CDN that Stitch exports need); everything else is blocked, so page scripts cannot
+    reach anything. Without allow_scripts, scripts are stripped and never run."""
     from playwright.sync_api import sync_playwright
 
-    html = re.sub(r"<script\b.*?</script>", "", html, flags=re.S | re.I)  # never run page scripts
+    if not allow_scripts:
+        html = re.sub(r"<script\b.*?</script>", "", html, flags=re.S | re.I)
+    hosts = ALLOWED_HOSTS + (SCRIPT_HOSTS if allow_scripts else ())
     with sync_playwright() as p:
         browser = None
         for channel in ("msedge", "chrome", None):
@@ -143,13 +154,16 @@ def measure_playwright(html: str) -> Measurement:
         if browser is None:
             raise RuntimeError("No browser available for Playwright")
         try:
-            page = browser.new_page(viewport={"width": CANVAS_W, "height": CANVAS_H})
-            # Only inline content and the allowed font hosts may load.
-            page.route("**/*", lambda route: route.continue_() if route.request.url.startswith(("data:", "about:")) or any(h in route.request.url for h in ALLOWED_HOSTS) else route.abort())
-            page.set_content(html, wait_until="load", timeout=15000)
-            data = page.evaluate(_JS)
+            page = browser.new_page(viewport={"width": CANVAS_W, "height": CANVAS_H}, java_script_enabled=True)
+            page.route("**/*", lambda route: route.continue_() if route.request.url.startswith(("data:", "about:")) or any(h in route.request.url for h in hosts) else route.abort())
+            page.set_content(html, wait_until="load", timeout=20000)
+            return work(page)
         finally:
             browser.close()
+
+
+def measure_playwright(html: str) -> Measurement:
+    data = render_page(html, lambda page: page.evaluate(_JS))
     return Measurement(engine="playwright", canvas_w=data["w"], canvas_h=data["h"],
                        boxes=[MeasuredBox(**b) for b in data["boxes"]])
 
@@ -167,6 +181,11 @@ def measure(html: str, prefer_browser: bool = True) -> Measurement:
 
 def _norm(text: str) -> str:
     return " ".join(text.split())
+
+
+def overlap(a, b, tolerance: float = 1.0) -> bool:
+    """True when two boxes (anything with x/y/w/h) overlap by more than `tolerance` px."""
+    return _overlap(a, b, tolerance)
 
 
 def _overlap(a: MeasuredBox, b: MeasuredBox, tolerance: float = 1.0) -> bool:

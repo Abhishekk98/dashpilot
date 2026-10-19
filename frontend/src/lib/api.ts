@@ -467,6 +467,72 @@ export interface PlanResponse {
   notes: string[];
 }
 
+export interface DetectedBox {
+  id: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  title: string;
+  text: string;
+  visual_id: string | null;
+  type: string | null;
+  background: string | null;
+  border: string | null;
+  radius: number;
+  title_font: string;
+  title_color: string | null;
+}
+
+export type MatchMethod = "id" | "title" | "ai" | "manual" | "none";
+
+export interface MappingItem {
+  visual_id: string;
+  box_id: string | null;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  method: MatchMethod;
+  score: number;
+  /** The card in the design shows another title, so Power BI draws this visual's title. */
+  pbi_title: boolean;
+}
+
+export interface ThemeColor {
+  hex: string;
+  role: "canvas" | "card" | "text" | "muted" | "accent" | "other";
+  weight: number;
+}
+
+export interface DesignImport {
+  source: "option_b" | "upload";
+  source_name: string;
+  source_hash: string;
+  plan_signature: string;
+  boxes: DetectedBox[];
+  mapping: MappingItem[];
+  palette: ThemeColor[];
+  heading_font: string;
+  body_font: string;
+  theme: { dataColors: string[]; background: string; foreground: string } & Record<string, unknown>;
+  issues: string[];
+  valid: boolean;
+  notes: string[];
+  skipped: number;
+  background_version: string;
+}
+
+export interface ImportResponse {
+  design: DesignImport;
+  visuals: PlanVisual[];
+  /** The imported HTML (for the "Original design" view). */
+  html: string;
+  notes: string[];
+}
+
+export type MappingEdit = Pick<MappingItem, "visual_id" | "box_id" | "x" | "y" | "w" | "h">;
+
 export class ApiError extends Error {}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -667,6 +733,37 @@ export function generateDesigns(id: string): Promise<PlanResponse> {
 
 export function selectDesign(id: string, variant: DesignStyle): Promise<PlanResponse> {
   return postJson(`/api/projects/${id}/design/select`, { id: variant });
+}
+
+/** The saved design import, or a fresh import of the design selected in Step 7. */
+export function getDesignImport(id: string): Promise<ImportResponse> {
+  return request(`/api/projects/${id}/design/import`);
+}
+
+export function importSelectedDesign(id: string): Promise<ImportResponse> {
+  return postJson(`/api/projects/${id}/design/import/selected`);
+}
+
+export function uploadDesignHtml(id: string, file: File): Promise<ImportResponse> {
+  const form = new FormData();
+  form.append("file", file);
+  return request(`/api/projects/${id}/design/import/upload`, { method: "POST", body: form });
+}
+
+export function saveDesignMapping(id: string, mapping: MappingEdit[]): Promise<ImportResponse> {
+  return request(`/api/projects/${id}/design/import/mapping`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mapping }),
+  });
+}
+
+export function designBackgroundUrl(id: string, version: string): string {
+  return `${API_BASE_URL}/api/projects/${id}/design/background.png?v=${encodeURIComponent(version)}`;
+}
+
+export function designThemeUrl(id: string): string {
+  return `${API_BASE_URL}/api/projects/${id}/design/theme.json`;
 }
 
 export function getCleaningPreview(id: string, table: string): Promise<DiffPreview> {
