@@ -3,7 +3,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import build, context, design_import, health, insights, llm, measures, model, planner, projects
+from app.api.routes import build, context, design_import, health, insights, llm, measures, model, planner, projects, reference
 from app.config import get_settings
 
 
@@ -27,6 +27,7 @@ def create_app() -> FastAPI:
     app.include_router(measures.router, prefix="/api")
     app.include_router(insights.router, prefix="/api")
     app.include_router(planner.router, prefix="/api")
+    app.include_router(reference.router, prefix="/api")
     app.include_router(design_import.router, prefix="/api")
     app.include_router(build.router, prefix="/api")
     app.include_router(llm.router, prefix="/api")

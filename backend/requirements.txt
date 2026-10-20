@@ -5,6 +5,8 @@ pydantic-settings==2.16.0
 python-multipart==0.0.32
 pandas==3.0.6
 openpyxl==3.1.5
+# Reference-image style extraction (design method C)
+pillow==12.3.0
 # PBIP validation against Microsoft's PBIR JSON schemas (cached in templates/pbir_schemas)
 jsonschema==4.26.0
 # Design contract rendering; drives the installed Edge/Chrome (no browser download needed)

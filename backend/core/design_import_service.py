@@ -38,7 +38,7 @@ class ImportError_(ValueError):
 
 
 class DesignImport(BaseModel):
-    source: Literal["option_b", "upload"]
+    source: Literal["option_b", "option_c", "upload"]
     source_name: str
     source_hash: str
     plan_signature: str
@@ -89,8 +89,14 @@ def _selected(store: ProjectStore, project: Project) -> tuple[str, str] | None:
     if not path.exists():
         return None
     design = store.read_json(project.id, DESIGN_FILE)
+    if design.get("selected_label"):
+        return path.read_text(encoding="utf-8"), design["selected_label"]
     chosen = next((v for v in design.get("variants", []) if v.get("id") == design.get("selected")), None)
-    return path.read_text(encoding="utf-8"), f"Option B · {chosen['label']}" if chosen else "Option B design"
+    return path.read_text(encoding="utf-8"), f"Option B · {chosen['label']}" if chosen else "Selected design"
+
+
+def _method(label: str) -> str:
+    return "option_c" if label.startswith("Option C") else "option_b"
 
 
 def _finish(store: ProjectStore, project: Project, plan: DashboardPlan, imp: DesignImport, html: str) -> ImportResponse:
@@ -145,7 +151,7 @@ def get_import(store: ProjectStore, project: Project, llm: LLMProvider | None) -
     if stored:
         imp = DesignImport.model_validate(stored)
         html = (_dir(store, project) / "source.html").read_text(encoding="utf-8")
-        changed_design = imp.source == "option_b" and selected is not None and _hash(selected[0]) != imp.source_hash
+        changed_design = imp.source != "upload" and selected is not None and _hash(selected[0]) != imp.source_hash
         if imp.plan_signature == plan_signature(plan) and not changed_design:
             return ImportResponse(design=imp, visuals=plan.visuals, html=html, notes=[])
         if imp.source == "upload":
@@ -154,7 +160,7 @@ def get_import(store: ProjectStore, project: Project, llm: LLMProvider | None) -
             return res
     if selected is None:
         raise ImportError_("Select a design in Step 7 (Design Method) or upload an HTML design.")
-    res = run_import(store, project, llm, "option_b", selected[1], selected[0])
+    res = run_import(store, project, llm, _method(selected[1]), selected[1], selected[0])
     if stored:
         res.notes.insert(0, "The plan or the selected design changed, so the design was imported again.")
     return res
@@ -164,7 +170,7 @@ def use_selected(store: ProjectStore, project: Project, llm: LLMProvider | None)
     selected = _selected(store, project)
     if selected is None:
         raise ImportError_("No design selected in Step 7 yet.")
-    return run_import(store, project, llm, "option_b", selected[1], selected[0])
+    return run_import(store, project, llm, _method(selected[1]), selected[1], selected[0])
 
 
 def import_upload(store: ProjectStore, project: Project, llm: LLMProvider | None, filename: str, data: bytes) -> ImportResponse:

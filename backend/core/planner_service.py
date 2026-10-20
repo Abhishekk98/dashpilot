@@ -5,7 +5,11 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
+from typing import Literal
+
 from pydantic import BaseModel
+
+from core import design_option_c as option_c
 
 from core.context_service import get_context
 from core.dax import StoredMeasures, build_plan as build_measures
@@ -27,10 +31,13 @@ class PlanError(ValueError):
 
 
 class DesignState(BaseModel):
-    variants: list[DesignVariant] = []
+    variants: list[DesignVariant] = []  # Option B variants (Option C keeps its own in design/option_c.json)
     selected: str | None = None
+    selected_method: Literal["B", "C"] | None = None
+    selected_label: str | None = None  # e.g. "Option C · Close to Reference" (Design Import shows it)
     plan_signature: str | None = None
     stale: bool = False  # the plan changed after these variants were generated
+    selected_stale: bool = False  # the selected design (B or C) no longer matches the plan
     generated_at: datetime | None = None
 
 
@@ -52,6 +59,10 @@ def _inputs(store: ProjectStore, project: Project, llm: LLMProvider | None):
 def _design(store: ProjectStore, project: Project, plan: DashboardPlan) -> DesignState:
     state = DesignState.model_validate(store.read_json(project.id, DESIGN_FILE))
     state.stale = bool(state.variants) and state.plan_signature != plan_signature(plan)
+    if state.selected and state.selected_method == "C":
+        state.selected_stale = option_c.get_state(store, project).stale
+    elif state.selected:
+        state.selected_stale = state.stale
     return state
 
 
@@ -98,8 +109,12 @@ def generate_design(store: ProjectStore, project: Project, llm: LLMProvider | No
         raise PlanError("Fix the dashboard plan first: " + "; ".join(plan.issues[:3]))
     context = get_context(store, project)
     variants = generate_variants(plan, context, llm)
-    state = DesignState(variants=variants, plan_signature=plan_signature(plan), generated_at=datetime.now(timezone.utc))
-    store.write_json(project.id, DESIGN_FILE, state.model_dump(mode="json"))
+    previous = DesignState.model_validate(store.read_json(project.id, DESIGN_FILE))
+    keep = previous.selected_method == "C"  # an Option C selection is not affected by new B variants
+    state = DesignState(variants=variants, plan_signature=plan_signature(plan), generated_at=datetime.now(timezone.utc),
+                        **({"selected": previous.selected, "selected_method": "C", "selected_label": previous.selected_label} if keep else {}))
+    store.write_json(project.id, DESIGN_FILE, state.model_dump(mode="json", exclude={"stale", "selected_stale"}))
+    state = _design(store, project, plan)
     ai = sum(v.source == "ai" for v in variants)
     notes = [f"{ai} of {len(variants)} variants designed by AI; {len(variants) - ai} from built-in templates."]
     notes += [f"{v.label}: {v.note}" for v in variants if v.note]
@@ -109,11 +124,14 @@ def generate_design(store: ProjectStore, project: Project, llm: LLMProvider | No
 def select_variant(store: ProjectStore, project: Project, llm: LLMProvider | None, variant_id: str) -> PlanResponse:
     response = get_plan(store, project, llm)
     state = response.design
-    chosen = next((v for v in state.variants if v.id == variant_id), None)
+    method = "C" if variant_id.startswith("reference_") else "B"
+    pool = option_c.get_state(store, project).variants if method == "C" else state.variants
+    chosen = next((v for v in pool if v.id == variant_id), None)
     if chosen is None:
         raise PlanError(f"Unknown design variant {variant_id}; generate the variants first.")
-    state.selected = variant_id
-    store.write_json(project.id, DESIGN_FILE, state.model_dump(mode="json", exclude={"stale"}))
+    state.selected, state.selected_method, state.selected_label = variant_id, method, f"Option {method} · {chosen.label}"
+    store.write_json(project.id, DESIGN_FILE, state.model_dump(mode="json", exclude={"stale", "selected_stale"}))
+    state = _design(store, project, response.plan)
     # The chosen page is what Design Import (Step 8) reads.
     path = store.project_dir(project.id) / "design" / "selected.html"
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -11,7 +11,6 @@ import { PillTag } from "@/components/ui/PillTag";
 import { PlaceholderCard } from "@/components/ui/PlaceholderCard";
 import {
   type DashboardPlan,
-  type DesignStyle,
   type DesignVariant,
   generateDesigns,
   getDashboardPlan,
@@ -24,14 +23,17 @@ import {
   type VisualInput,
 } from "@/lib/api";
 
+import { OptionCPanel } from "./OptionCPanel";
 import { PlanWireframe } from "./PlanWireframe";
 import { DesignFrame, ScaledCanvas } from "./ScaledCanvas";
 import { type Draft, VisualEditor } from "./VisualEditor";
 
-const METHODS = [
-  { key: "B", icon: "auto_awesome", title: "Design with DashPilot (AI)", text: "Three styled 1280×720 designs from your plan and brand, each checked against the design contract.", active: true },
-  { key: "C", icon: "image_search", title: "Design from Reference Image", text: "Take the style of a dashboard you like and apply it to your own KPIs.", active: false },
-  { key: "A", icon: "draw", title: "Design with Google Stitch", text: "Get a ready-to-paste Stitch prompt, design there and import the HTML.", active: false },
+type Method = "B" | "C";
+
+const METHODS: { key: Method | "A"; icon: string; title: string; text: string; available: boolean }[] = [
+  { key: "B", icon: "auto_awesome", title: "Design with DashPilot (AI)", text: "Three styled 1280×720 designs from your plan and brand, each checked against the design contract.", available: true },
+  { key: "C", icon: "image_search", title: "Design from Reference Image", text: "Upload a dashboard you like; DashPilot takes its style (not its layout) and designs your KPIs in it.", available: true },
+  { key: "A", icon: "draw", title: "Design with Google Stitch", text: "Get a ready-to-paste Stitch prompt, design there and import the HTML.", available: false },
 ];
 
 const LIMITS = { kpi: 5, chart: 6, slicer: 3 } as const;
@@ -67,9 +69,13 @@ export function DesignWorkspace() {
   const [notes, setNotes] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<DesignVariant | null>(null);
+  const [method, setMethod] = useState<Method>("B");
 
   const load = useCallback((res: PlanResponse) => {
-    setData(res);
+    setData((prev) => {
+      if (!prev && res.design.selected_method === "C") setMethod("C"); // reopen on the method in use
+      return res;
+    });
     setDrafts(toDrafts(res.plan));
     setTitle(res.plan.title);
     if (res.notes.length) setNotes(res.notes);
@@ -171,7 +177,8 @@ export function DesignWorkspace() {
 
   const charts = plan?.visuals.filter((v) => v.role === "chart").length ?? 0;
   const kpis = plan?.visuals.filter((v) => v.role === "kpi").length ?? 0;
-  const chosen = design?.variants.find((v) => v.id === design.selected) ?? null;
+  const chosenLabel = design?.selected ? (design.selected_label ?? design.variants.find((v) => v.id === design.selected)?.label ?? null) : null;
+  const canContinue = !!chosenLabel && !design?.selected_stale;
 
   return (
     <div className="flex flex-col w-full">
@@ -304,30 +311,52 @@ export function DesignWorkspace() {
               <Icon name="palette" className="text-[22px]" /> Design Method
             </h2>
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-              {METHODS.map((m) => (
-                <div
-                  key={m.key}
-                  className={`p-5 rounded-card flex flex-col gap-3 ${m.active ? "bg-surface-container-lowest/95 shadow-card ring-2 ring-primary-container" : "bg-surface-container-lowest/60 opacity-70"}`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="w-10 h-10 rounded-full bg-secondary-container/40 flex items-center justify-center">
-                      <Icon name={m.icon} className="text-[20px] text-on-surface" />
-                    </span>
-                    {m.active ? (
-                      <PillTag tone="dark" dot size="md">Selected</PillTag>
-                    ) : (
-                      <PillTag tone="warning" size="md">Coming soon</PillTag>
-                    )}
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    <span className="font-code-sm text-code-sm text-on-surface-variant">Option {m.key}</span>
-                    <span className="font-title-lg text-title-lg text-on-surface font-semibold">{m.title}</span>
-                    <span className="font-body-md text-xs text-on-surface-variant leading-relaxed">{m.text}</span>
-                  </div>
-                </div>
-              ))}
+              {METHODS.map((m) => {
+                const active = m.key === method;
+                return (
+                  <button
+                    key={m.key}
+                    type="button"
+                    disabled={!m.available}
+                    aria-pressed={active}
+                    onClick={() => m.available && setMethod(m.key as Method)}
+                    className={`p-5 rounded-card flex flex-col gap-3 text-left transition-shadow ${active ? "bg-surface-container-lowest/95 shadow-card ring-2 ring-primary-container" : m.available ? "bg-surface-container-lowest/80 hover:shadow-card" : "bg-surface-container-lowest/60 opacity-70 cursor-not-allowed"}`}
+                  >
+                    <div className="flex items-center justify-between gap-2 w-full">
+                      <span className="w-10 h-10 rounded-full bg-secondary-container/40 flex items-center justify-center">
+                        <Icon name={m.icon} className="text-[20px] text-on-surface" />
+                      </span>
+                      {active ? (
+                        <PillTag tone="dark" dot size="md">Selected</PillTag>
+                      ) : m.available ? (
+                        <PillTag size="md">Available</PillTag>
+                      ) : (
+                        <PillTag tone="warning" size="md">Coming soon</PillTag>
+                      )}
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <span className="font-code-sm text-code-sm text-on-surface-variant">Option {m.key}</span>
+                      <span className="font-title-lg text-title-lg text-on-surface font-semibold">{m.title}</span>
+                      <span className="font-body-md text-xs text-on-surface-variant leading-relaxed">{m.text}</span>
+                    </div>
+                  </button>
+                );
+              })}
             </div>
 
+            {method === "C" && (
+              <OptionCPanel
+                projectId={projectId}
+                design={design}
+                blocked={dirty ? "Save your plan changes first" : !plan.valid ? "Fix the plan issues first" : null}
+                selecting={busy === "select"}
+                onSelect={(id) => run("select", () => selectDesign(projectId, id))}
+                onPreview={setPreview}
+              />
+            )}
+
+            {method === "B" && (
+            <>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <p className="font-body-md text-body-md text-on-surface-variant max-w-2xl">
                 {design?.variants.length
@@ -385,7 +414,7 @@ export function DesignWorkspace() {
                           variant={isChosen ? "primary" : "secondary"}
                           icon={isChosen ? "check_circle" : "radio_button_unchecked"}
                           disabled={busy !== null || design.stale}
-                          onClick={() => run("select", () => selectDesign(projectId, v.id as DesignStyle))}
+                          onClick={() => run("select", () => selectDesign(projectId, v.id))}
                         >
                           {isChosen ? "Selected" : "Use this design"}
                         </PillButton>
@@ -397,6 +426,8 @@ export function DesignWorkspace() {
                   );
                 })}
               </div>
+            )}
+            </>
             )}
           </section>
         </>
@@ -424,7 +455,7 @@ export function DesignWorkspace() {
             <span className="w-2.5 h-2.5 rounded-full bg-secondary-container" />
             <span className="font-label-md text-label-md text-on-surface">
               <strong className="font-semibold">Step 7 of 9</strong>
-              {plan ? ` • ${kpis} KPI cards • ${charts} charts • ${chosen ? `Design: ${chosen.label}` : "No design selected"}` : " • Planning…"}
+              {plan ? ` • ${kpis} KPI cards • ${charts} charts • ${chosenLabel ? `Design: ${chosenLabel}` : "No design selected"}` : " • Planning…"}
             </span>
           </div>
           <div className="flex flex-wrap items-center gap-3 justify-end">
@@ -442,12 +473,12 @@ export function DesignWorkspace() {
             >
               <Icon name="file_download" className="text-[16px]" /> Export Plan (.json)
             </button>
-            {chosen && !design?.stale ? (
+            {canContinue ? (
               <PillButton href={`/project/design-import?project=${projectId}`} arrow>
                 Next: Design Import
               </PillButton>
             ) : (
-              <PillButton arrow disabled title="Select a design first">
+              <PillButton arrow disabled title={chosenLabel ? "The plan or style changed; regenerate and select a design" : "Select a design first"}>
                 Next: Design Import
               </PillButton>
             )}

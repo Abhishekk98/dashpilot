@@ -441,7 +441,8 @@ export interface DashboardPlan {
 export type DesignStyle = "dark_futuristic" | "light_elegant" | "glassmorphism";
 
 export interface DesignVariant {
-  id: DesignStyle;
+  /** Option B: a DesignStyle; Option C: "reference_close" | "reference_brand". */
+  id: string;
   label: string;
   html: string;
   source: "ai" | "template";
@@ -453,12 +454,52 @@ export interface DesignVariant {
 }
 
 export interface DesignState {
+  /** Option B variants (Option C keeps its own, see ReferenceState). */
   variants: DesignVariant[];
-  selected: DesignStyle | null;
+  selected: string | null;
+  selected_method: "B" | "C" | null;
+  /** e.g. "Option C · Close to Reference". */
+  selected_label: string | null;
   plan_signature: string | null;
-  /** The plan changed after these variants were generated. */
+  /** The plan changed after the Option B variants were generated. */
   stale: boolean;
+  /** The selected design (B or C) no longer matches the plan/profile. */
+  selected_stale: boolean;
   generated_at: string | null;
+}
+
+export type CardStyle = "glass" | "solid" | "outlined" | "elevated";
+
+/** Style profile read from a reference image (design method C, spec 9.3); editable. */
+export interface StyleProfile {
+  palette: { primary: string; accents: string[]; text: string; muted: string };
+  background: { type: "solid" | "gradient"; colors: string[] };
+  card_color: string;
+  card_style: CardStyle;
+  radius_px: number;
+  shadow: "none" | "soft" | "deep" | "glow";
+  font_character: "geometric sans" | "humanist sans" | "serif" | "mono";
+  spacing: "compact" | "regular" | "airy";
+  mode: "light" | "dark";
+  layout_pattern: string;
+  source: "pillow" | "ai";
+}
+
+export interface ReferenceState {
+  image: { filename: string; mime: string; width: number; height: number; size_bytes: number; sha: string; uploaded_at: string } | null;
+  profile: StyleProfile | null;
+  profile_note: string | null;
+  edited: boolean;
+  variants: DesignVariant[];
+  plan_signature: string | null;
+  generated_at: string | null;
+  /** The plan or the profile changed after the variants were generated. */
+  stale: boolean;
+}
+
+export interface ReferenceResponse {
+  state: ReferenceState;
+  notes: string[];
 }
 
 export interface PlanResponse {
@@ -506,7 +547,7 @@ export interface ThemeColor {
 }
 
 export interface DesignImport {
-  source: "option_b" | "upload";
+  source: "option_b" | "option_c" | "upload";
   source_name: string;
   source_hash: string;
   plan_signature: string;
@@ -767,8 +808,36 @@ export function generateDesigns(id: string): Promise<PlanResponse> {
   return postJson(`/api/projects/${id}/design/variants`);
 }
 
-export function selectDesign(id: string, variant: DesignStyle): Promise<PlanResponse> {
+export function selectDesign(id: string, variant: string): Promise<PlanResponse> {
   return postJson(`/api/projects/${id}/design/select`, { id: variant });
+}
+
+export function getReference(id: string): Promise<ReferenceResponse> {
+  return request(`/api/projects/${id}/design/reference`);
+}
+
+/** Upload a reference dashboard image (PNG/JPG/WebP, max 10 MB); returns its style profile. */
+export function uploadReference(id: string, file: File): Promise<ReferenceResponse> {
+  const form = new FormData();
+  form.append("file", file);
+  return request(`/api/projects/${id}/design/reference`, { method: "POST", body: form });
+}
+
+export function saveStyleProfile(id: string, profile: StyleProfile): Promise<ReferenceResponse> {
+  return request(`/api/projects/${id}/design/reference/profile`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(profile),
+  });
+}
+
+export function generateReferenceDesigns(id: string): Promise<ReferenceResponse> {
+  return postJson(`/api/projects/${id}/design/reference/variants`);
+}
+
+/** `version` (the image hash) busts the browser cache after a new upload. */
+export function referenceImageUrl(id: string, version: string): string {
+  return `${API_BASE_URL}/api/projects/${id}/design/reference/image?v=${encodeURIComponent(version.slice(0, 12))}`;
 }
 
 /** The saved design import, or a fresh import of the design selected in Step 7. */

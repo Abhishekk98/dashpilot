@@ -36,7 +36,7 @@ MAX_HTML = 80_000
 
 
 class DesignVariant(BaseModel):
-    id: Archetype
+    id: str  # Option B: an Archetype; Option C: "reference_close" / "reference_brand"
     label: str
     html: str
     source: Literal["ai", "template"]
@@ -113,10 +113,12 @@ def _container(v: PlanVisual) -> str:
     return f'<div class="dp-card dp-visual" {attrs}><p class="dp-title">{e(v.title)}</p><div class="dp-chart" data-chart-area></div></div>'
 
 
-def template_html(plan: DashboardPlan, context: BusinessContext, archetype: Archetype) -> str:
-    """Deterministic contract-compliant design (also the baseline the AI restyles)."""
-    t = _theme(archetype, context.palette)
-    heading, body, link = _fonts(context.font_stack)
+def template_html(plan: DashboardPlan, context: BusinessContext, archetype: Archetype | None = None,
+                  theme: dict[str, str] | None = None, fonts: tuple[str, str, str] | None = None) -> str:
+    """Deterministic contract-compliant design (also the baseline the AI restyles). Option C passes its
+    own `theme` (same keys as _theme) and `fonts` built from a reference image's style profile."""
+    t = theme or _theme(archetype or "light_elegant", context.palette)
+    heading, body, link = fonts or _fonts(context.font_stack)
     e = htmllib.escape
     font_link = f'<link rel="stylesheet" href="{link}">' if link else ""
     containers = "\n    ".join(_container(v) for v in plan.visuals)
@@ -161,41 +163,40 @@ class _AIHtml(BaseModel):
     html: str
 
 
-def _prompt(plan: DashboardPlan, context: BusinessContext, archetype: Archetype, description: str, baseline: str, errors: list[str]) -> str:
+def _prompt(plan: DashboardPlan, style: str, palette: dict, fonts: str, baseline: str, errors: list[str]) -> str:
     visuals = [{"id": v.id, "role": v.role, "type": v.type, "title": v.title,
                 "box": {"left": v.box.x, "top": v.box.y, "width": v.box.w, "height": v.box.h}} for v in plan.visuals]
     feedback = ("\n\nYOUR PREVIOUS ATTEMPT FAILED THESE CHECKS; FIX ALL OF THEM:\n- " + "\n- ".join(errors[:20])) if errors else ""
     return (
         PROMPT.read_text(encoding="utf-8")
-        .replace("{style}", f"{dict((a, l) for a, l, _ in VARIANTS)[archetype]}: {description}")
-        .replace("{palette}", json.dumps(context.palette.model_dump()))
-        .replace("{fonts}", context.font_stack)
+        .replace("{style}", style)
+        .replace("{palette}", json.dumps(palette))
+        .replace("{fonts}", fonts)
         .replace("{visuals}", json.dumps(visuals, ensure_ascii=False))
         .replace("{baseline}", baseline)
         + feedback
     )
 
 
-def generate_variant(plan: DashboardPlan, context: BusinessContext, archetype: Archetype, llm: LLMProvider | None,
-                     prefer_browser: bool = True) -> tuple[DesignVariant, bool]:
-    """One variant. Returns (variant, ai_still_usable) — False after quota/key errors so callers stop asking."""
-    label, description = next((l, d) for a, l, d in VARIANTS if a == archetype)
-    baseline = template_html(plan, context, archetype)
+def generate_styled(plan: DashboardPlan, variant_id: str, label: str, style: str, palette: dict, fonts: str, baseline: str,
+                    llm: LLMProvider | None, prefer_browser: bool = True) -> tuple[DesignVariant, bool]:
+    """AI restyle of `baseline` checked against the design contract: 2 retries with the validator's
+    errors, then the baseline template. Returns (variant, ai_still_usable) — False after quota/key
+    errors so callers stop asking. Shared by design methods B (presets) and C (reference style)."""
     if llm is None:
         _, m = check(baseline, plan, prefer_browser)
-        return DesignVariant(id=archetype, label=label, html=baseline, source="template", engine=m.engine,
+        return DesignVariant(id=variant_id, label=label, html=baseline, source="template", engine=m.engine,
                              note="No AI key: built-in template."), False
     errors: list[str] = []
     attempts = 0
-    note = None
     for attempt in range(1 + MAX_RETRIES):
         attempts = attempt + 1
         try:
-            answer = llm.generate_text(_prompt(plan, context, archetype, description, baseline, errors), json_schema=_AIHtml)
+            answer = llm.generate_text(_prompt(plan, style, palette, fonts, baseline, errors), json_schema=_AIHtml)
         except (LLMRateLimitError, LLMNotConfiguredError) as exc:
             note = f"AI unavailable ({str(exc).split(' (', 1)[0][:100]}); built-in template used."
             _, m = check(baseline, plan, prefer_browser)
-            return DesignVariant(id=archetype, label=label, html=baseline, source="template", attempts=attempts, engine=m.engine, note=note), False
+            return DesignVariant(id=variant_id, label=label, html=baseline, source="template", attempts=attempts, engine=m.engine, note=note), False
         except (LLMError, Exception) as exc:  # bad JSON etc.: counts as a failed attempt
             errors = [f"The answer was not valid JSON with an 'html' field ({type(exc).__name__})."]
             continue
@@ -205,11 +206,19 @@ def generate_variant(plan: DashboardPlan, context: BusinessContext, archetype: A
             continue
         errors, m = check(html, plan, prefer_browser)
         if not errors:
-            return DesignVariant(id=archetype, label=label, html=html, source="ai", attempts=attempts, engine=m.engine), True
-        logger.info("AI design %s attempt %d failed %d checks", archetype, attempts, len(errors))
+            return DesignVariant(id=variant_id, label=label, html=html, source="ai", attempts=attempts, engine=m.engine), True
+        logger.info("AI design %s attempt %d failed %d checks", variant_id, attempts, len(errors))
     _, m = check(baseline, plan, prefer_browser)
-    return DesignVariant(id=archetype, label=label, html=baseline, source="template", attempts=attempts, errors=errors,
+    return DesignVariant(id=variant_id, label=label, html=baseline, source="template", attempts=attempts, errors=errors,
                          engine=m.engine, note=f"AI design failed the contract after {attempts} attempts; built-in template used."), True
+
+
+def generate_variant(plan: DashboardPlan, context: BusinessContext, archetype: Archetype, llm: LLMProvider | None,
+                     prefer_browser: bool = True) -> tuple[DesignVariant, bool]:
+    """One Option B preset variant."""
+    label, description = next((l, d) for a, l, d in VARIANTS if a == archetype)
+    return generate_styled(plan, archetype, label, f"{label}: {description}", context.palette.model_dump(), context.font_stack,
+                           template_html(plan, context, archetype), llm, prefer_browser)
 
 
 def generate_variants(plan: DashboardPlan, context: BusinessContext, llm: LLMProvider | None, prefer_browser: bool = True) -> list[DesignVariant]:
