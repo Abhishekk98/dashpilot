@@ -533,6 +533,42 @@ export interface ImportResponse {
 
 export type MappingEdit = Pick<MappingItem, "visual_id" | "box_id" | "x" | "y" | "w" | "h">;
 
+export interface BuildCheck {
+  id: "schemas" | "tmdl" | "dax" | "fields" | "layout" | "resources";
+  label: string;
+  status: "pass" | "warn" | "fail";
+  detail: string;
+  count: number | null;
+  issues: string[];
+}
+
+export interface BuildResult {
+  folder: string;
+  zip_name: string;
+  size_bytes: number;
+  file_count: number;
+  digest: string;
+  built_at: string;
+  data_folder: string;
+  checks: BuildCheck[];
+  valid: boolean;
+  tables: number;
+  measures: number;
+  visuals: number;
+  bindings: number;
+  partitions: number;
+}
+
+export interface BuildStatus {
+  ready: boolean;
+  blockers: string[];
+  default_data_folder: string;
+  project_folder: string;
+  build: BuildResult | null;
+  /** The plan, mapping or design changed after the last build. */
+  stale: boolean;
+}
+
 export class ApiError extends Error {}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -764,6 +800,19 @@ export function designBackgroundUrl(id: string, version: string): string {
 
 export function designThemeUrl(id: string): string {
   return `${API_BASE_URL}/api/projects/${id}/design/theme.json`;
+}
+
+export function getBuildStatus(id: string): Promise<BuildStatus> {
+  return request(`/api/projects/${id}/build`);
+}
+
+/** Build, validate and zip the PBIP; `dataFolder` is where the user will unzip the Data folder. */
+export function buildProject(id: string, dataFolder: string): Promise<BuildStatus> {
+  return postJson(`/api/projects/${id}/build`, { data_folder: dataFolder });
+}
+
+export function buildDownloadUrl(id: string): string {
+  return `${API_BASE_URL}/api/projects/${id}/build/download`;
 }
 
 export function getCleaningPreview(id: string, table: string): Promise<DiffPreview> {

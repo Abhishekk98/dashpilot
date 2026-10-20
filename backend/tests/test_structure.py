@@ -4,7 +4,7 @@ import pytest
 
 SPEC_MODULES = [
     "upload", "profiling", "cleaning", "context", "modelling", "dax",
-    "insights", "planner", "stitch_prompt", "design_import", "pbip_builder", "validator",
+    "insights", "planner", "stitch_prompt", "design_import", "pbip_builder", "pbip_validator",
 ]
 
 

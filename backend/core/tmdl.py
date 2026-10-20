@@ -7,6 +7,7 @@ Reference: https://learn.microsoft.com/analysis-services/tmdl/tmdl-overview
 from __future__ import annotations
 
 import io
+import json
 import re
 import uuid
 import zipfile
@@ -100,15 +101,21 @@ def _column(table: str, col: ModelColumn) -> str:
         lines.append("\t\tisHidden")
     lines.append(f"\t\tlineageTag: {_tag(table, col.name)}")
     lines.append(f"\t\tsummarizeBy: {'sum' if col.measure_candidate else 'none'}")
-    lines.append(f"\t\tsourceColumn: {col.name}")
+    lines.append(f"\t\tsourceColumn: {_text_value(col.name)}")
     return "\n".join(lines)
+
+
+def _text_value(value: str) -> str:
+    """TMDL text property value: double-quoted (with "" escapes) when it has quotes or edge spaces."""
+    return '"' + value.replace('"', '""') + '"' if re.search(r"[\"']|^\s|\s$", value) else value
 
 
 def _table(t: ModelTable, m_script: str) -> str:
     cols = "\n\n".join(_column(t.name, c) for c in t.columns)
     return (
         f"table {name(t.name)}\n\tlineageTag: {_tag(t.name)}\n\n{cols}\n\n"
-        f"\tpartition {name(t.name)} = m\n\t\tmode: import\n\t\tsource =\n{_indent(m_script, 4)}\n"
+        f"\tpartition {name(t.name)} = m\n\t\tmode: import\n\t\tsource =\n{_indent(m_script, 4)}\n\n"
+        "\tannotation PBI_ResultType = Table\n"
     )
 
 
@@ -124,7 +131,8 @@ def _date_table(plan: ModelPlan) -> str:
         cols.append("\n".join(lines))
     return (
         f"table {DATE_TABLE}\n\tdataCategory: Time\n\tlineageTag: {_tag(DATE_TABLE)}\n\n" + "\n\n".join(cols)
-        + f"\n\n\tpartition {DATE_TABLE} = m\n\t\tmode: import\n\t\tsource =\n{_indent(date_table_m(plan), 4)}\n"
+        + f"\n\n\tpartition {DATE_TABLE} = m\n\t\tmode: import\n\t\tsource =\n{_indent(date_table_m(plan), 4)}\n\n"
+        "\tannotation PBI_ResultType = Table\n"
     )
 
 
@@ -177,7 +185,8 @@ def measures_table(measures) -> str:
     )
 
 
-def build_files(plan: ModelPlan, cleaned: dict[str, PipelineResult], project_name: str, measures=None) -> dict[str, str]:
+def build_files(plan: ModelPlan, cleaned: dict[str, PipelineResult], project_name: str, measures=None,
+                data_folder: str = DATA_FOLDER_DEFAULT) -> dict[str, str]:
     """{relative path: content} for the {Project}.SemanticModel folder (included tables only)."""
     root = model_folder(project_name)
     d = f"{root}/definition"
@@ -189,11 +198,15 @@ def build_files(plan: ModelPlan, cleaned: dict[str, PipelineResult], project_nam
         f"{d}/model.tmdl": (
             "model Model\n\tculture: en-US\n\tdefaultPowerBIDataSourceVersion: powerBI_V3\n\tsourceQueryCulture: en-US\n"
             "\tdataAccessOptions\n\t\tlegacyRedirects\n\t\treturnErrorValuesAsNull\n\n"
+            # Power Query bookkeeping Desktop writes itself; without it Desktop reports "pending changes".
+            f"annotation PBI_QueryOrder = {json.dumps(['DataFolder'] + refs)}\n\n"
+            "annotation __PBI_TimeIntelligenceEnabled = 0\n\n"
             + "\n".join(f"ref table {name(r)}" for r in refs) + "\n"
         ),
         f"{d}/expressions.tmdl": (
-            f"expression DataFolder = {m_text(DATA_FOLDER_DEFAULT)} meta [IsParameterQuery=true, Type=\"Text\", IsParameterQueryRequired=true]\n"
-            f"\tlineageTag: {_tag('DataFolder')}\n"
+            f"expression DataFolder = {m_text(data_folder)} meta [IsParameterQuery=true, Type=\"Text\", IsParameterQueryRequired=true]\n"
+            f"\tlineageTag: {_tag('DataFolder')}\n\n"
+            "\tannotation PBI_ResultType = Text\n"
         ),
         f"{d}/relationships.tmdl": _relationships(plan),
     }

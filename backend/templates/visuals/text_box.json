@@ -1,0 +1,7 @@
+{
+  "_comment": "DashPilot PBIR visual template: visualType, query roles for the plan field/measures, default formatting ({{token}} = theme color).",
+  "visualType": "textbox",
+  "roles": {},
+  "max_measures": 0,
+  "objects": {}
+}

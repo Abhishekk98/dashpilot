@@ -40,14 +40,16 @@ frontend/
 backend/
   app/                     # FastAPI: main.py (app factory), config.py (settings), api/routes/
   core/                    # one module per spec module: upload, profiling, cleaning, context, modelling,
-                           # dax, insights, planner, stitch_prompt, design_import, pbip_builder, validator
+                           # dax, insights, planner, stitch_prompt, design_import, pbip_builder, pbip_validator
+                           # (+ pbip_service: Step 9 build/zip in storage/{id}/build/)
                            # + planner_service, design_ai (method B), design_contract (shared Playwright
                            #   render_page/measure + contract checks), design_import(_service) (Step 8:
                            #   boxes, mapping, background.png, theme.json in storage/{id}/design/);
                            #   planned: design_style (method C)
   llm/                     # base.py (LLMProvider interface, errors, retry), gemini.py, claude.py,
                            # factory.py (picks provider from LLM_PROVIDER), prompts/
-  templates/               # tmdl/, visuals/, themes/ for the PBIP builder
+  templates/               # visuals/ (one PBIR template per visual type), pbir_schemas/ (Microsoft's PBIP/PBIR
+                           # JSON schemas, cached for offline validation)
   kpi_library/             # industry KPI definitions (JSON)
   samples/                 # sample datasets for testing
   output/                  # generated projects (git-ignored)

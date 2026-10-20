@@ -1,0 +1,29 @@
+{
+  "_comment": "DashPilot PBIR visual template: visualType, query roles for the plan field/measures, default formatting ({{token}} = theme color).",
+  "visualType": "pivotTable",
+  "roles": {
+    "category": "Rows",
+    "measures": "Values"
+  },
+  "max_measures": 6,
+  "objects": {
+    "columnHeaders": {
+      "fontColor": "{{text}}",
+      "backColor": "{{card}}",
+      "fontFamily": "Segoe UI Semibold",
+      "fontSize": 9
+    },
+    "rowHeaders": {
+      "fontColor": "{{text}}",
+      "backColor": "{{card}}",
+      "fontFamily": "Segoe UI",
+      "fontSize": 9
+    },
+    "values": {
+      "fontColorPrimary": "{{text}}",
+      "backColorPrimary": "{{card}}",
+      "fontFamily": "Segoe UI",
+      "fontSize": 9
+    }
+  }
+}

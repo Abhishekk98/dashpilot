@@ -54,6 +54,8 @@ class DetectedBox(BaseModel):
     radius: int = 0
     title_font: str = ""
     title_color: str | None = None
+    # Content area inside the card as [left, top, right, bottom] insets in px (None = whole card).
+    inset: list[int] | None = None
 
 
 class MappingItem(BaseModel):
@@ -213,10 +215,24 @@ _DETECT = r"""
     found = found.filter(b => !found.some(a => a !== b && a.el.contains(b.el) && area(b.el) >= 0.25 * area(a.el)));
   }
 
+  // Where the Power BI visual goes inside the card: the chart area when the HTML marks one,
+  // otherwise below the title (or right of it for short pill-shaped cards like slicers).
+  const contentArea = (el, titleEl) => {
+    const areaEl = el.querySelector('[data-chart-area]');
+    if (areaEl) return rel(areaEl);
+    if (!titleEl) return null;
+    const b = rel(el), t = rel(titleEl);
+    let a = null;
+    if (b.h <= 64 && t.x + t.w < b.x + b.w * 0.7) a = {x: t.x + t.w + 6, y: b.y + 4, w: b.x + b.w - (t.x + t.w + 6) - 6, h: b.h - 8};
+    else if (t.y + t.h < b.y + b.h * 0.6) a = {x: b.x + 8, y: t.y + t.h + 6, w: b.w - 16, h: b.y + b.h - (t.y + t.h + 6) - 8};
+    return a && a.w >= 20 && a.h >= 16 ? a : null;
+  };
+
   const boxes = found.map(({el, titleEl}) => {
     const cs = getComputedStyle(el);
     const ts = titleEl ? getComputedStyle(titleEl) : cs;
     return {
+      area: contentArea(el, titleEl),
       ...rel(el),
       title: el.getAttribute('data-title') || (titleEl ? own(titleEl) : ''),
       text: (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 300),
@@ -259,6 +275,15 @@ _DETECT = r"""
 """
 
 
+def _inset(box: dict, area: dict | None) -> list[int] | None:
+    if not area:
+        return None
+    left, top = area["x"] - box["x"], area["y"] - box["y"]
+    right, bottom = box["x"] + box["w"] - area["x"] - area["w"], box["y"] + box["h"] - area["y"] - area["h"]
+    inset = [max(0, round(v)) for v in (left, top, right, bottom)]
+    return inset if inset[0] + inset[2] < box["w"] - 20 and inset[1] + inset[3] < box["h"] - 16 else None
+
+
 def _first_family(stack: str) -> str:
     return (stack or "").split(",")[0].strip().strip("'\"") or "Segoe UI"
 
@@ -276,6 +301,7 @@ def extract(html: str, allow_scripts: bool = False) -> Extraction:
             title=" ".join((b["title"] or "").split())[:120], text=b["text"], visual_id=b["visual_id"], type=b["type"],
             background=css_hex(b["background"]), border=css_hex(b["border"]), radius=round(b["radius"]),
             title_font=_first_family(b["title_font"]), title_color=css_hex(b["title_color"]),
+            inset=_inset(b, b.get("area")),
         ))
     return Extraction(
         canvas_w=data["w"], canvas_h=data["h"], boxes=boxes, skipped=skipped,

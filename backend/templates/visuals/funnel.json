@@ -1,0 +1,21 @@
+{
+  "_comment": "DashPilot PBIR visual template: visualType, query roles for the plan field/measures, default formatting ({{token}} = theme color).",
+  "visualType": "funnel",
+  "roles": {
+    "category": "Category",
+    "measures": "Y"
+  },
+  "max_measures": 1,
+  "objects": {
+    "labels": {
+      "color": "{{text}}",
+      "fontFamily": "Segoe UI",
+      "fontSize": 9
+    },
+    "categoryAxis": {
+      "color": "{{muted}}",
+      "fontFamily": "Segoe UI",
+      "fontSize": 9
+    }
+  }
+}

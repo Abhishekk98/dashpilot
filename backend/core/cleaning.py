@@ -193,10 +193,15 @@ _M_FUNCTIONS = {
         't = Text.Remove(t0, {"$", "€", "£", "₹", "¥", ",", " ", "(", ")", "%"}), '
         'n = try Number.From(t, "en-US") otherwise null in if n = null then null else if neg then -n else n'
     ),
+    # Excel.Workbook hands date cells over as serial numbers (days since 1899-12-30, which is exactly
+    # what DateTime.From(number) reads); text that the culture rejects (18/04/2023 under en-US) gets a
+    # second try with the other day/month order, like the mixed-format parsing in the preview.
     "fnDateTime": (
         "(v, culture as text) => if v = null then null else if v is datetime then v "
-        "else if v is date then DateTime.From(v) else if v is number then null "
-        "else try DateTime.From(Text.From(v), culture) otherwise null"
+        "else if v is date then DateTime.From(v) "
+        "else if v is number then (if v >= 1 and v < 2958466 then DateTime.From(v) else null) "
+        "else let t = Text.From(v) in try DateTime.From(t, culture) "
+        "otherwise try DateTime.From(t, if culture = \"en-US\" then \"en-GB\" else \"en-US\") otherwise null"
     ),
     "fnBool": (
         f"(v) => if v = null then null else if v is logical then v else let t = Text.Lower(Text.Trim(Text.From(v))) in "

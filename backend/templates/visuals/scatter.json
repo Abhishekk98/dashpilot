@@ -1,0 +1,38 @@
+{
+  "_comment": "DashPilot PBIR visual template: visualType, query roles for the plan field/measures, default formatting ({{token}} = theme color).",
+  "visualType": "scatterChart",
+  "roles": {
+    "category": "Category",
+    "measures": [
+      "X",
+      "Y",
+      "Size"
+    ]
+  },
+  "max_measures": 3,
+  "objects": {
+    "categoryAxis": {
+      "show": true,
+      "labelColor": "{{muted}}",
+      "fontFamily": "Segoe UI",
+      "fontSize": 9,
+      "showAxisTitle": false
+    },
+    "valueAxis": {
+      "show": true,
+      "labelColor": "{{muted}}",
+      "fontFamily": "Segoe UI",
+      "fontSize": 9,
+      "showAxisTitle": false,
+      "gridlineShow": true,
+      "gridlineColor": "{{grid}}"
+    },
+    "legend": {
+      "show": false,
+      "position": "Top",
+      "labelColor": "{{muted}}",
+      "fontFamily": "Segoe UI",
+      "fontSize": 9
+    }
+  }
+}

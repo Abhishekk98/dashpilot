@@ -193,7 +193,9 @@ def _pick_charts(measures: list[Measure], dims: list[DimensionOption], insights:
         add("share", "donut", f"{primary} Share by {small.label.title()}", [primary], small, "desc")
     geo = next((d for d in geos if re.search(r"city|state|country|region|district|province", d.label, re.I)), None)
     if geo:
-        add("top", "map" if re.search(r"city", geo.label, re.I) else "filled_map", f"{primary} by {geo.label.title()}", [primary], geo, None)
+        # A bar, not a map: Power BI's map visuals (Azure Maps) need a tenant switch many users cannot turn on.
+        # Maps stay available in the plan editor.
+        add("top", "clustered_bar", f"{primary} by {geo.label.title()}", [primary], geo, "desc")
     if rates:
         target = next((d for d in ranked if not re.search(re.escape(d.label.split()[0]), rates[0], re.I)), ranked[0] if ranked else None)
         if target:

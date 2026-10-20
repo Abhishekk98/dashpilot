@@ -1,0 +1,255 @@
+"""PBIP builder + validator: structure, PBIR schema validity, placement, validator rules, API, fuzz."""
+
+import io
+import json
+import zipfile
+
+import pandas as pd
+import pytest
+
+from core.cleaning import SourceTable
+from core.cleaning_rules import build_plan as clean_plan
+from core.cleaning_rules import table_pipelines
+from core.dax import GenContext, StoredMeasures
+from core.dax import build_plan as build_measures
+from core.dax_eval import date_frame
+from core.design_import import DetectedBox, MappingItem, ThemeColor, build_theme
+from core.insights import Engine, InsightPlan, compute_insights, link_questions, template_questions
+from core.modelling import DATE_TABLE, ModelSettings, build_model
+from core.pbip_builder import BuildInputs, build, folder_name, visual_rect
+from core.pbip_validator import validate
+from core.planner import build_plan as build_dashboard
+from core.profiling import build_report
+from core.upload import UploadError, csv_delimiter, read_tables
+from tests.conftest import SAMPLES
+from tests.test_cleaning_fuzz import dataset
+from tests.test_planner import CTX
+
+PALETTE = [ThemeColor(hex="#F4F1EA", role="canvas"), ThemeColor(hex="#FFFFFF", role="card"), ThemeColor(hex="#1B1C1C", role="text"),
+           ThemeColor(hex="#6B6B6B", role="muted"), ThemeColor(hex="#F8CF4B", role="accent")]
+INSET = [17, 37, 17, 13]
+
+
+def _inputs(files: dict[str, bytes], name: str = "Shop Co", inset: list[int] | None = INSET) -> BuildInputs | None:
+    sources = []
+    for filename, content in files.items():
+        try:
+            tables = read_tables(filename, content)
+        except UploadError:
+            continue
+        delimiter = csv_delimiter(content) if filename.endswith(".csv") else ","
+        sources += [SourceTable(name=n, filename=filename, sheet=s, delimiter=delimiter, df=df) for n, (s, df) in tables.items()]
+    if not sources:
+        return None
+    report = build_report([(s.name, "f", s.sheet, s.df) for s in sources])
+    decisions = {s.id: {"status": "accepted"} for s in clean_plan(report, sources, {}).steps}
+    pipelines, _ = table_pipelines(report, sources, decisions)
+    cleaned = {n: (p.src, [s for s in p.accepted if not s.error], p.result) for n, p in pipelines.items()}
+    model = build_model(report, cleaned, ModelSettings())
+    frames = {t.name: pipelines[t.name].result.df.reset_index(drop=True) for t in model.tables if t.included}
+    for t in model.tables:
+        for c in t.columns:
+            if t.included and c.derived:
+                frames[t.name][c.name] = pd.to_datetime(frames[t.name][c.name.removesuffix("_date")], errors="coerce").dt.normalize()
+    if model.date_table.enabled:
+        frames[DATE_TABLE] = date_frame(model.date_table.start, model.date_table.end, 1)
+    ctx = GenContext(model=model, report=report, frames=frames, industries=["Retail"])
+    mplan, measures = build_measures(ctx, StoredMeasures(), False)
+    if not any(m.status == "passed" for m in measures):
+        return None
+    engine = Engine(ctx, measures)
+    found, north, dims = compute_insights(engine)
+    questions = template_questions(engine, found, dims, ["Executive Leadership"])
+    link_questions(questions, found)
+    insights = InsightPlan(insights=found, questions=questions, north_star=north, rows_scanned=0, dimensions=[], confidence=1)
+    plan = build_dashboard(f"{name} Dashboard", model, report, measures, [c.name for c in mplan.cards], insights)
+    assert plan.valid, plan.issues
+    boxes = [DetectedBox(id=f"box_{i:02d}", x=v.box.x, y=v.box.y, w=v.box.w, h=v.box.h, title=v.title, visual_id=v.id,
+                         inset=([60, 4, 6, 4] if v.role == "slicer" else inset) if inset else None)
+             for i, v in enumerate(plan.visuals, 1)]
+    mapping = [MappingItem(visual_id=v.id, box_id=b.id, x=b.x, y=b.y, w=b.w, h=b.h, method="id", score=1) for v, b in zip(plan.visuals, boxes)]
+    return BuildInputs(
+        project_name=name, model=model, cleaned={n: p.result for n, p in pipelines.items()},
+        measures=[m for m in measures if m.status != "error"], plan=plan, boxes=boxes, mapping=mapping,
+        theme=build_theme(f"DashPilot {name}", PALETTE, CTX.palette), background=b"\x89PNG\r\n\x1a\n" + b"0" * 64,
+        sources=list(files.items()), data_folder="C:\\DashPilot\\Shop_Co\\Data\\",
+    )
+
+
+@pytest.fixture(scope="module")
+def shop() -> BuildInputs:
+    return _inputs({n: (SAMPLES / n).read_bytes() for n in ("orders.csv", "customers.xlsx", "products.csv")})
+
+
+def _visuals(files: dict[str, bytes]) -> list[dict]:
+    return [json.loads(c) for p, c in files.items() if p.endswith("/visual.json")]
+
+
+# --- builder -----------------------------------------------------------------------------------
+
+def test_build_structure_and_validation(shop):
+    files = build(shop)
+    root = folder_name(shop.project_name)
+    assert root == "Shop_Co"
+    for path in (f"{root}.pbip", f"{root}.Report/definition.pbir", f"{root}.Report/.platform", f"{root}.Report/definition/report.json",
+                 f"{root}.Report/definition/version.json", f"{root}.Report/definition/pages/pages.json",
+                 f"{root}.Report/StaticResources/RegisteredResources/DashPilotTheme.json",
+                 f"{root}.Report/StaticResources/RegisteredResources/DashPilotBackground.png",
+                 f"{root}.SemanticModel/definition.pbism", f"{root}.SemanticModel/definition/model.tmdl",
+                 f"{root}.SemanticModel/definition/tables/_Measures.tmdl", f"{root}.SemanticModel/definition/expressions.tmdl",
+                 "Data/orders.csv", "Data/customers.xlsx", "README.md"):
+        assert path in files, path
+    assert any(p.startswith("Data/Cleaned/") and p.endswith(".csv") for p in files)
+    checks = validate(files)
+    assert all(c.status == "pass" for c in checks), [(c.id, c.issues) for c in checks if c.status != "pass"]
+    assert next(c for c in checks if c.id == "schemas").count >= 20
+    assert b'DataFolder = "C:\\DashPilot\\Shop_Co\\Data\\"' in files[f"{root}.SemanticModel/definition/expressions.tmdl"]
+    assert b"annotation PBI_QueryOrder" in files[f"{root}.SemanticModel/definition/model.tmdl"]
+    assert json.loads(files[f"{root}.Report/StaticResources/RegisteredResources/DashPilotTheme.json"]) == shop.theme
+
+
+def test_visuals_follow_plan_and_mapping(shop):
+    files = build(shop)
+    visuals = {v["name"]: v for v in _visuals(files)}
+    assert len(visuals) == len(shop.plan.visuals)
+    by_plan = {v.id: v for v in shop.plan.visuals}
+    for data in visuals.values():
+        assert "active" not in json.dumps(data["visual"].get("query", {}))  # collapses tables in Power BI
+        bg = data["visual"]["visualContainerObjects"]["background"][0]["properties"]["show"]["expr"]["Literal"]["Value"]
+        assert bg == "false"
+    table = next(v for v in visuals.values() if v["visual"]["visualType"] == "tableEx")
+    plan_table = next(v for v in shop.plan.visuals if v.type == "table")
+    assert len(table["visual"]["query"]["queryState"]["Values"]["projections"]) == 1 + len(plan_table.measures)
+    text = next(v for v in visuals.values() if v["visual"]["visualType"] == "textbox")
+    runs = json.dumps(text["visual"]["objects"]["general"])
+    insights = next(v for v in shop.plan.visuals if v.role == "insights")
+    assert all(line.split(",")[0] in runs for line in insights.text)
+    date_slicer = next(v for v in visuals.values() if v["visual"]["visualType"] == "slicer"
+                       and "Dim_Date" in json.dumps(v["visual"]["query"]))
+    assert date_slicer["visual"]["objects"]["data"][0]["properties"]["mode"]["expr"]["Literal"]["Value"] == "'Between'"
+    trend = next(v for v in visuals.values() if v["visual"]["visualType"] in ("lineChart", "areaChart"))
+    assert trend["visual"]["query"]["sortDefinition"]["sort"][0]["direction"] == "Ascending"
+    # Visuals sit in the card's content area, under the design title.
+    kpi_plan = next(v for v in shop.plan.visuals if v.role == "kpi")
+    kpi_item = next(m for m in shop.mapping if m.visual_id == kpi_plan.id)
+    kpi_box = next(b for b in shop.boxes if b.id == kpi_item.box_id)
+    assert visual_rect(kpi_plan, kpi_item, kpi_box) == (kpi_item.x + 17, kpi_item.y + 37, kpi_item.w - 34, kpi_item.h - 50)
+    del by_plan
+
+
+def test_power_bi_title_when_slot_shows_another_title(shop):
+    inputs = shop.__class__(**{**shop.__dict__, "mapping": [m.model_copy(update={"pbi_title": True}) for m in shop.mapping]})
+    visuals = _visuals(build(inputs))
+    chart = next(v for v in visuals if v["visual"]["visualType"] == "clusteredBarChart")
+    props = chart["visual"]["visualContainerObjects"]["title"][0]["properties"]
+    assert props["show"]["expr"]["Literal"]["Value"] == "true" and "text" in props
+    card = next(v for v in visuals if v["visual"]["visualType"] == "card")
+    assert card["visual"]["objects"]["categoryLabels"][0]["properties"]["show"]["expr"]["Literal"]["Value"] == "true"
+    assert all(c.status == "pass" for c in validate(build(inputs)))
+
+
+def test_m_reads_excel_serial_dates_and_day_first_text():
+    from core.cleaning import _M_FUNCTIONS  # noqa: PLC0415
+    fn = _M_FUNCTIONS["fnDateTime"]
+    assert "v is number then (if v >= 1 and v < 2958466 then DateTime.From(v)" in fn
+    assert '"en-GB"' in fn and "otherwise try DateTime.From(t" in fn
+
+
+# --- validator ------------------------------------------------------------------------------------
+
+def test_validator_catches_broken_files(shop):
+    files = dict(build(shop))
+    root = folder_name(shop.project_name)
+    page = next(p for p in files if p.endswith("/page.json"))
+    data = json.loads(files[page])
+    del data["displayOption"]
+    files[page] = json.dumps(data).encode()
+
+    measures = f"{root}.SemanticModel/definition/tables/_Measures.tmdl"
+    text = files[measures].decode()
+    text = text.replace("\tmeasure ", "    measure ", 1)  # spaces instead of tabs
+    first = next(line for line in text.splitlines() if line.startswith("\tmeasure") and " = " in line)
+    text = text.replace(first, first + " + (1", 1)  # unbalanced bracket
+    text = text.replace("\tmeasure 'Units Sold' =", "\tmeasure 'Units Sold' = [Ghost Measure] +", 1)
+    files[measures] = text.encode()
+
+    visual_paths = [p for p in files if p.endswith("/visual.json")]
+    a, b = (json.loads(files[p]) for p in visual_paths[3:5])
+    b["position"].update(x=a["position"]["x"], y=a["position"]["y"])
+    files[visual_paths[4]] = json.dumps(b).encode()
+    c = json.loads(files[visual_paths[6]])
+    c["visual"]["query"]["queryState"].setdefault("Y", {"projections": []})["projections"].append(
+        {"field": {"Measure": {"Expression": {"SourceRef": {"Entity": "_Measures"}}, "Property": "No Such Measure"}},
+         "queryRef": "_Measures.No Such Measure", "nativeQueryRef": "No Such Measure"})
+    files[visual_paths[6]] = json.dumps(c).encode()
+    del files[f"{root}.Report/StaticResources/RegisteredResources/DashPilotBackground.png"]
+
+    checks = {c.id: c for c in validate(files)}
+    assert checks["schemas"].status == "fail" and "displayOption" in " ".join(checks["schemas"].issues)
+    assert checks["tmdl"].status == "fail"
+    assert any("tabs" in i for i in checks["tmdl"].issues) and any("expression has" in i for i in checks["tmdl"].issues)
+    assert checks["dax"].status == "fail" and "Ghost Measure" in " ".join(checks["dax"].issues)
+    assert checks["fields"].status == "fail" and "No Such Measure" in " ".join(checks["fields"].issues)
+    assert checks["layout"].status == "fail" and "overlap" in " ".join(checks["layout"].issues)
+    assert checks["resources"].status == "fail" and "DashPilotBackground.png" in " ".join(checks["resources"].issues)
+
+
+def test_map_visuals_warn(shop):
+    plan = shop.plan.model_copy(deep=True)
+    chart = next(v for v in plan.visuals if v.type == "clustered_bar")
+    chart.type = "map"
+    inputs = shop.__class__(**{**shop.__dict__, "plan": plan})
+    layout = next(c for c in validate(build(inputs)) if c.id == "layout")
+    assert layout.status == "warn" and "Azure Maps" in layout.issues[0]
+
+
+# --- API --------------------------------------------------------------------------------------------
+
+def test_build_api_flow(api, sample_bytes):
+    from tests.test_design_import import _browser, _designed  # noqa: PLC0415
+    if not _browser():
+        pytest.skip("needs Playwright with Edge/Chrome for the design import")
+    pid = api.post("/api/projects", json={"name": "Empty"}).json()["id"]
+    status = api.get(f"/api/projects/{pid}/build").json()
+    assert not status["ready"] and status["blockers"]
+    assert api.post(f"/api/projects/{pid}/build", json={}).status_code == 422
+
+    pid = _designed(api, sample_bytes)
+    assert api.get(f"/api/projects/{pid}/design/import").json()["design"]["valid"]
+    status = api.get(f"/api/projects/{pid}/build").json()
+    assert status["ready"] and status["build"] is None and status["default_data_folder"].endswith("\\Data\\")
+    assert api.post(f"/api/projects/{pid}/build", json={"data_folder": 'C:\\bad"path'}).status_code == 422
+    assert api.get(f"/api/projects/{pid}/build/download").status_code == 409  # nothing built yet
+
+    res = api.post(f"/api/projects/{pid}/build", json={"data_folder": "D:\\Reports\\Shop"})
+    assert res.status_code == 200, res.text
+    b = res.json()["build"]
+    assert b["valid"] and b["data_folder"] == "D:\\Reports\\Shop\\" and b["visuals"] == len(api.get(f"/api/projects/{pid}/plan").json()["plan"]["visuals"])
+    assert {c["status"] for c in b["checks"]} == {"pass"}
+    z = api.get(f"/api/projects/{pid}/build/download")
+    assert z.status_code == 200
+    names = zipfile.ZipFile(io.BytesIO(z.content)).namelist()
+    assert f"{b['folder']}/{b['folder']}.pbip" in names and any(n.endswith("/visual.json") for n in names)
+
+    # Editing the plan makes the build stale (the mapping follows on the next import).
+    plan = api.get(f"/api/projects/{pid}/plan").json()["plan"]
+    visuals = [{k: v[k] for k in ("role", "type", "title", "measures", "dimension", "sort", "purpose", "question_id", "text")} for v in plan["visuals"]]
+    visuals.pop(next(i for i, v in enumerate(visuals) if v["role"] == "chart"))
+    api.put(f"/api/projects/{pid}/plan", json={"visuals": visuals})
+    assert api.get(f"/api/projects/{pid}/build").json()["stale"]
+
+
+# --- fuzz ----------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("batch", range(3))
+def test_build_on_random_datasets(batch):
+    ran = 0
+    for seed in range(400 + batch * 8, 400 + batch * 8 + 8):
+        inputs = _inputs(dataset(seed), name=f"Fuzz {seed}", inset=INSET if seed % 2 else None)
+        if inputs is None:
+            continue
+        checks = validate(build(inputs))
+        bad = [(c.id, c.issues[:3]) for c in checks if c.status == "fail"]
+        assert not bad, f"seed {seed}: {bad}"
+        ran += 1
+    assert ran

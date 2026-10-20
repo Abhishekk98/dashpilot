@@ -1,0 +1,17 @@
+{
+  "_comment": "DashPilot PBIR visual template: visualType, query roles for the plan field/measures, default formatting ({{token}} = theme color).",
+  "visualType": "gauge",
+  "roles": {
+    "measures": "Y"
+  },
+  "max_measures": 1,
+  "objects": {
+    "calloutValue": {
+      "color": "{{text}}",
+      "fontFamily": "Segoe UI"
+    },
+    "dataPoint": {
+      "fill": "{{accent}}"
+    }
+  }
+}
