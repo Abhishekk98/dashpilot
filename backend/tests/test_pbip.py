@@ -16,9 +16,10 @@ from core.dax_eval import date_frame
 from core.design_import import DetectedBox, MappingItem, ThemeColor, build_theme
 from core.insights import Engine, InsightPlan, compute_insights, link_questions, template_questions
 from core.modelling import DATE_TABLE, ModelSettings, build_model
-from core.pbip_builder import BuildInputs, build, folder_name, visual_rect
+from core.pbip_builder import BuildInputs, PageInput, build, folder_name, page_name, visual_rect
 from core.pbip_validator import validate
 from core.planner import build_plan as build_dashboard
+from core.planner import page_plan
 from core.profiling import build_report
 from core.upload import UploadError, csv_delimiter, read_tables
 from tests.conftest import SAMPLES
@@ -62,23 +63,35 @@ def _inputs(files: dict[str, bytes], name: str = "Shop Co", inset: list[int] | N
     questions = template_questions(engine, found, dims, ["Executive Leadership"])
     link_questions(questions, found)
     insights = InsightPlan(insights=found, questions=questions, north_star=north, rows_scanned=0, dimensions=[], confidence=1)
-    plan = build_dashboard(f"{name} Dashboard", model, report, measures, [c.name for c in mplan.cards], insights)
-    assert plan.valid, plan.issues
-    boxes = [DetectedBox(id=f"box_{i:02d}", x=v.box.x, y=v.box.y, w=v.box.w, h=v.box.h, title=v.title, visual_id=v.id,
-                         inset=([60, 4, 6, 4] if v.role == "slicer" else inset) if inset else None)
-             for i, v in enumerate(plan.visuals, 1)]
-    mapping = [MappingItem(visual_id=v.id, box_id=b.id, x=b.x, y=b.y, w=b.w, h=b.h, method="id", score=1) for v, b in zip(plan.visuals, boxes)]
+    whole = build_dashboard(f"{name} Dashboard", model, report, measures, [c.name for c in mplan.cards], insights)
+    assert whole.valid, whole.issues
+    pages = []
+    for n in range(1, len(whole.pages) + 1):
+        plan = page_plan(whole, n)
+        boxes = [DetectedBox(id=f"box_{i:02d}", x=v.box.x, y=v.box.y, w=v.box.w, h=v.box.h, title=v.title, visual_id=v.id,
+                             inset=([60, 4, 6, 4] if v.role == "slicer" else inset) if inset else None)
+                 for i, v in enumerate(plan.visuals, 1)]
+        mapping = [MappingItem(visual_id=v.id, box_id=b.id, x=b.x, y=b.y, w=b.w, h=b.h, method="id", score=1) for v, b in zip(plan.visuals, boxes)]
+        pages.append(PageInput(plan=plan, boxes=boxes, mapping=mapping, background=b"\x89PNG\r\n\x1a\n" + bytes([n]) * 64))
+    first = pages[0]
     return BuildInputs(
         project_name=name, model=model, cleaned={n: p.result for n, p in pipelines.items()},
-        measures=[m for m in measures if m.status != "error"], plan=plan, boxes=boxes, mapping=mapping,
-        theme=build_theme(f"DashPilot {name}", PALETTE, CTX.palette), background=b"\x89PNG\r\n\x1a\n" + b"0" * 64,
-        sources=list(files.items()), data_folder="C:\\DashPilot\\Shop_Co\\Data\\",
+        measures=[m for m in measures if m.status != "error"], plan=first.plan, boxes=first.boxes, mapping=first.mapping,
+        theme=build_theme(f"DashPilot {name}", PALETTE, CTX.palette), background=first.background,
+        sources=list(files.items()), data_folder="C:\\DashPilot\\Shop_Co\\Data\\", extra_pages=pages[1:],
     )
 
 
 @pytest.fixture(scope="module")
 def shop() -> BuildInputs:
     return _inputs({n: (SAMPLES / n).read_bytes() for n in ("orders.csv", "customers.xlsx", "products.csv")})
+
+
+def _all_pbi_titles(shop: BuildInputs) -> BuildInputs:
+    """Every card on every page gets its title from Power BI."""
+    flip = lambda mapping: [m.model_copy(update={"pbi_title": True}) for m in mapping]  # noqa: E731
+    extra = [PageInput(pg.plan, pg.boxes, flip(pg.mapping), pg.background) for pg in shop.extra_pages]
+    return shop.__class__(**{**shop.__dict__, "mapping": flip(shop.mapping), "extra_pages": extra})
 
 
 def _visuals(files: dict[str, bytes]) -> list[dict]:
@@ -106,19 +119,29 @@ def test_build_structure_and_validation(shop):
     assert b'DataFolder = "C:\\DashPilot\\Shop_Co\\Data\\"' in files[f"{root}.SemanticModel/definition/expressions.tmdl"]
     assert b"annotation PBI_QueryOrder" in files[f"{root}.SemanticModel/definition/model.tmdl"]
     assert json.loads(files[f"{root}.Report/StaticResources/RegisteredResources/DashPilotTheme.json"]) == shop.theme
+    # Two pages: Overview + Details, each with its own background; slicers synced across pages.
+    order = json.loads(files[f"{root}.Report/definition/pages/pages.json"])["pageOrder"]
+    assert order == [page_name(1), page_name(2)]
+    second = json.loads(files[f"{root}.Report/definition/pages/{page_name(2)}/page.json"])
+    assert second["displayName"] == "Details" and "DashPilotBackground_p2.png" in json.dumps(second)
+    assert files[f"{root}.Report/StaticResources/RegisteredResources/DashPilotBackground_p2.png"] == shop.extra_pages[0].background
+    p2 = [json.loads(c) for p, c in files.items() if f"/pages/{page_name(2)}/visuals/" in p]
+    assert len(p2) == len(shop.extra_pages[0].plan.visuals)
+    synced = [v["visual"]["syncGroup"]["groupName"] for v in _visuals(files) if v["visual"]["visualType"] == "slicer"]
+    assert len(synced) == 2 * len(set(synced))  # one group per slicer, on both pages
 
 
 def test_visuals_follow_plan_and_mapping(shop):
     files = build(shop)
     visuals = {v["name"]: v for v in _visuals(files)}
-    assert len(visuals) == len(shop.plan.visuals)
+    assert len(visuals) == sum(len(pg.plan.visuals) for pg in shop.pages)
     by_plan = {v.id: v for v in shop.plan.visuals}
     for data in visuals.values():
         assert "active" not in json.dumps(data["visual"].get("query", {}))  # collapses tables in Power BI
         bg = data["visual"]["visualContainerObjects"]["background"][0]["properties"]["show"]["expr"]["Literal"]["Value"]
         assert bg == "false"
     table = next(v for v in visuals.values() if v["visual"]["visualType"] == "tableEx")
-    plan_table = next(v for v in shop.plan.visuals if v.type == "table")
+    plan_table = next(v for pg in shop.pages for v in pg.plan.visuals if v.type == "table")
     assert len(table["visual"]["query"]["queryState"]["Values"]["projections"]) == 1 + len(plan_table.measures)
     text = next(v for v in visuals.values() if v["visual"]["visualType"] == "textbox")
     runs = json.dumps(text["visual"]["objects"]["general"])
@@ -138,7 +161,7 @@ def test_visuals_follow_plan_and_mapping(shop):
 
 
 def test_power_bi_title_when_slot_shows_another_title(shop):
-    inputs = shop.__class__(**{**shop.__dict__, "mapping": [m.model_copy(update={"pbi_title": True}) for m in shop.mapping]})
+    inputs = _all_pbi_titles(shop)
     visuals = _visuals(build(inputs))
     chart = next(v for v in visuals if v["visual"]["visualType"] == "clusteredBarChart")
     props = chart["visual"]["visualContainerObjects"]["title"][0]["properties"]
@@ -214,11 +237,11 @@ def test_validator_requires_datafolder_paths(shop):
 
 
 def test_slicers_show_friendly_titles(shop):
-    inputs = shop.__class__(**{**shop.__dict__, "mapping": [m.model_copy(update={"pbi_title": True}) for m in shop.mapping]})
+    inputs = _all_pbi_titles(shop)
     for files, header in ((build(shop), False), (build(inputs), True)):
         plan = {v.title: v for v in shop.plan.visuals if v.role == "slicer"}
         slicers = [v for v in _visuals(files) if v["visual"]["visualType"] == "slicer"]
-        assert slicers and len(slicers) == len(plan)
+        assert slicers and len(slicers) == len(plan) * len(shop.pages)  # every page has the slicers
         for s in slicers:
             proj = next(iter(s["visual"]["query"]["queryState"].values()))["projections"][0]
             assert proj["displayName"] in plan  # "Payment Channel", not payment_channel
@@ -314,7 +337,9 @@ def test_build_api_flow(api, sample_bytes, monkeypatch, tmp_path):
     res = api.post(f"/api/projects/{pid}/build", json={"data_folder": "D:\\Reports\\Shop"})
     assert res.status_code == 200, res.text
     b = res.json()["build"]
-    assert b["valid"] and b["data_folder"] == "D:\\Reports\\Shop\\" and b["visuals"] == len(api.get(f"/api/projects/{pid}/plan").json()["plan"]["visuals"])
+    whole = api.get(f"/api/projects/{pid}/plan").json()["plan"]
+    slicers = sum(v["role"] == "slicer" for v in whole["visuals"])
+    assert b["valid"] and b["data_folder"] == "D:\\Reports\\Shop\\" and b["visuals"] == len(whole["visuals"]) + slicers * (len(whole["pages"]) - 1)
     assert {c["status"] for c in b["checks"]} == {"pass"}
     z = api.get(f"/api/projects/{pid}/build/download")
     assert z.status_code == 200
@@ -338,7 +363,7 @@ def test_build_api_flow(api, sample_bytes, monkeypatch, tmp_path):
 
     # Editing the plan makes the build stale (the mapping follows on the next import).
     plan = api.get(f"/api/projects/{pid}/plan").json()["plan"]
-    visuals = [{k: v[k] for k in ("role", "type", "title", "measures", "dimension", "sort", "purpose", "question_id", "text")} for v in plan["visuals"]]
+    visuals = [{k: v[k] for k in ("role", "type", "title", "measures", "dimension", "sort", "purpose", "question_id", "text", "page")} for v in plan["visuals"]]
     visuals.pop(next(i for i, v in enumerate(visuals) if v["role"] == "chart"))
     api.put(f"/api/projects/{pid}/plan", json={"visuals": visuals})
     assert api.get(f"/api/projects/{pid}/build").json()["stale"]

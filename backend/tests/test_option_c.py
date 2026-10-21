@@ -11,6 +11,7 @@ from core.context import BrandPalette, BusinessContext
 from core.design_ai import template_html
 from core.design_contract import check, render_page
 from core.design_option_c import generate_variants, theme, variant_template
+from core.planner import page_plan
 from core.style_profile import StyleError, build_profile, open_image, pillow_profile, sniff
 from llm.base import LLMRateLimitError
 from tests.fakes import FakeProvider
@@ -55,7 +56,8 @@ def light_dashboard() -> Image.Image:
 
 @pytest.fixture(scope="module")
 def plan():
-    return _plan(_ctx({n: (SAMPLES / n).read_bytes() for n in ("orders.csv", "customers.xlsx", "products.csv")}))[0]
+    whole = _plan(_ctx({n: (SAMPLES / n).read_bytes() for n in ("orders.csv", "customers.xlsx", "products.csv")}))[0]
+    return page_plan(whole, 1)  # templates are made per page
 
 
 # --- image validation ------------------------------------------------------------------------------

@@ -19,8 +19,9 @@ from core.design_ai import generate_variant, generate_variants, template_html
 from core.design_contract import check, measure_playwright, measure_static, playwright_available
 from core.insights import Engine, InsightPlan, compute_insights, link_questions, template_questions
 from core.modelling import DATE_TABLE, ModelSettings, build_model
+from core.design_layouts import LAYOUTS, arrange, check as layout_check, suggest
 from core.planner import (
-    CHART_TYPES, MAX_CHARTS, MAX_KPIS, VisualInput, apply_edit, build_plan, dimension_options, layout, validate,
+    CHART_TYPES, MAX_CHARTS, MAX_KPIS, VisualInput, apply_edit, build_plan, dimension_options, layout, page_plan, validate,
 )
 from core.profiling import build_report
 from core.upload import UploadError, csv_delimiter, read_tables
@@ -86,7 +87,11 @@ def test_plan_shape_and_rules(shop):
     roles = [v.role for v in plan.visuals]
     assert roles.count("slicer") >= 1 and 4 <= roles.count("kpi") <= MAX_KPIS
     charts = [v for v in plan.visuals if v.role == "chart"]
-    assert 4 <= len(charts) <= MAX_CHARTS and roles.count("insights") == 1
+    assert 5 <= len(charts) and roles.count("insights") == 1
+    # Enough charts for two pages: Overview (KPIs, 3 charts, insights) + Details (the rest).
+    assert plan.pages == ["Overview", "Details"]
+    assert [v.page for v in charts] == [1, 1, 1] + [2] * (len(charts) - 3) and len(charts) - 3 <= MAX_CHARTS
+    assert all(v.page == 1 for v in plan.visuals if v.role in ("kpi", "insights"))
     passed = {m.name for m in measures if m.status == "passed"}
     fields = {d.field for d in dims}
     for v in charts:
@@ -96,8 +101,22 @@ def test_plan_shape_and_rules(shop):
     assert next(v for v in plan.visuals if v.role == "slicer").title == "Date Range"
     assert len({v.title for v in plan.visuals}) == len(plan.visuals)
     assert len({v.purpose for v in charts}) == len(charts)  # each chart answers its own question
-    # every box on the 1280x720 canvas, nothing overlapping
+    # every neutral box on the 1280x720 canvas; slicers on every page
     assert all(0 <= v.box.x and v.box.x + v.box.w <= 1280 and 0 <= v.box.y and v.box.y + v.box.h <= 720 for v in plan.visuals)
+    details = page_plan(plan, 2)
+    assert {v.role for v in details.visuals} == {"slicer", "chart"} and details.pages == ["Details"]
+
+
+def test_pages_follow_edits(shop):
+    plan, measures, dims = shop
+    items = [VisualInput(**v.model_dump(include=set(VisualInput.model_fields))) for v in plan.visuals]
+    one = [i.model_copy(update={"page": 1}) for i in items if i.role != "chart" or i.page == 1]
+    edited = apply_edit(plan, one, measures, dims)
+    assert edited.valid and edited.pages == ["Overview"]
+    moved = [i.model_copy(update={"page": 2}) if i.role == "chart" and i.page == 1 else i for i in items]
+    edited = apply_edit(plan, moved, measures, dims)  # every chart on page 2: page 1 has no chart
+    assert not edited.valid and any("page 1" in i for i in edited.issues)
+    assert apply_edit(plan, items, measures, dims).pages == ["Overview", "Details"]
 
 
 def test_validator_catches_bad_edits(shop):
@@ -129,7 +148,7 @@ def test_edit_reorders_adds_and_removes(shop):
     assert edited.valid, edited.issues
     assert edited.title == "My Board"
     out_charts = [v for v in edited.visuals if v.role == "chart"]
-    assert len(out_charts) == len(charts) - 1 and out_charts[-1].type == "clustered_column"
+    assert len(out_charts) == len(charts) - 1 and [v for v in out_charts if v.page == 1][-1].type == "clustered_column"  # order kept within its page
     assert [v.id for v in edited.visuals] == [f"{v.role if v.role != 'chart' else 'visual'}_{n}" for n, v in enumerate(edited.visuals, 1)]
 
 
@@ -151,16 +170,43 @@ CTX = BusinessContext(company_name="Shop", industries=["E-commerce"])
 
 @pytest.mark.parametrize("archetype", ["dark_futuristic", "light_elegant", "glassmorphism"])
 def test_templates_pass_the_contract(shop, archetype):
+    for n in (1, 2):
+        plan = page_plan(shop[0], n)
+        html = template_html(plan, CTX, archetype)
+        errors, m = check(html, plan, prefer_browser=False)
+        assert errors == [] and m.engine == "static" and len(m.boxes) == len(plan.visuals)
+
+
+@pytest.mark.parametrize("layout_name", list(LAYOUTS))
+def test_every_layout_passes_the_contract(shop, layout_name):
+    for n in (1, 2):
+        plan = page_plan(shop[0], n)
+        arr = arrange(plan, layout_name)
+        assert layout_check(arr) == []
+        placed = arr.plan(plan)
+        html = template_html(placed, CTX, "dark_futuristic", arrangement=arr, page_label=f"Page {n}")
+        errors, m = check(html, placed, prefer_browser=False)
+        assert errors == [], (layout_name, n, errors)
+        got = {b.id: (b.x, b.y, b.w, b.h) for b in m.boxes}
+        assert got == {v.id: (v.box.x, v.box.y, v.box.w, v.box.h) for v in arr.visuals}
+
+
+def test_variants_use_different_layouts(shop):
     plan = shop[0]
-    html = template_html(plan, CTX, archetype)
-    errors, m = check(html, plan, prefer_browser=False)
-    assert errors == [] and m.engine == "static" and len(m.boxes) == len(plan.visuals)
+    variants = generate_variants(plan, CTX, None, prefer_browser=False)
+    assert all(len(v.pages) == 2 and len(v.layouts) == 2 and v.valid for v in variants)
+    for page in (0, 1):
+        assert len({v.layouts[page] for v in variants}) == 3  # three different layouts per page
+    assert variants[0].layouts[0] == suggest(page_plan(plan, 1))[0]
+    assert all(LAYOUTS[v.layouts[0]][0] in v.label for v in variants)
+    firsts = [{b: v.pages[0].count(b) for b in ("dp-panel-rail", "dp-kpi-hero")} for v in variants]
+    assert len({json.dumps(f, sort_keys=True) + v.layouts[0] for f, v in zip(firsts, variants)}) == 3
 
 
 def test_contract_reports_every_broken_rule(shop):
-    plan = shop[0]
+    plan = page_plan(shop[0], 2)  # the Details page has 4+ charts
     html = template_html(plan, CTX, "light_elegant")
-    kpi = next(v for v in plan.visuals if v.role == "kpi")
+    kpi = next(v for v in plan.visuals if v.role in ("kpi", "slicer"))
     charts = [v for v in plan.visuals if v.role == "chart"]
     broken = (html.replace('style="width:1280px;height:720px"', 'style="width:1200px;height:720px"')
               .replace(f'data-visual-id="{charts[0].id}"', 'data-visual-id="visual_99"')
@@ -181,7 +227,7 @@ def test_contract_reports_every_broken_rule(shop):
 
 
 def test_contract_requires_exact_visible_titles_and_insights(shop):
-    plan = shop[0]
+    plan = page_plan(shop[0], 1)
     insights = next(v for v in plan.visuals if v.role == "insights")
     chart = next(v for v in plan.visuals if v.role == "chart")
     html = template_html(plan, CTX, "light_elegant")
@@ -198,7 +244,7 @@ def test_contract_requires_exact_visible_titles_and_insights(shop):
 def test_browser_render_catches_css_layout_changes(shop):
     if not playwright_available():
         pytest.skip("playwright not installed")
-    plan = shop[0]
+    plan = page_plan(shop[0], 1)
     html = template_html(plan, CTX, "glassmorphism")
     try:
         m = measure_playwright(html)
@@ -220,7 +266,7 @@ def test_static_measure_ignores_padding_properties():
 # --- design method B ----------------------------------------------------------------------
 
 def test_ai_retry_then_success(shop):
-    plan = shop[0]
+    plan = page_plan(shop[0], 1)
     good = template_html(plan, CTX, "dark_futuristic").replace("<title>", "<title>AI ")
     llm = FakeProvider(replies=[json.dumps({"html": "<div>not a dashboard</div>"}), json.dumps({"html": good})])
     variant, usable = generate_variant(plan, CTX, "dark_futuristic", llm, prefer_browser=False)
@@ -229,7 +275,7 @@ def test_ai_retry_then_success(shop):
 
 
 def test_ai_always_invalid_falls_back_to_template(shop):
-    plan = shop[0]
+    plan = page_plan(shop[0], 1)
     llm = FakeProvider(replies=[json.dumps({"html": "<p>x</p>"})] * 3)
     variant, usable = generate_variant(plan, CTX, "glassmorphism", llm, prefer_browser=False)
     assert usable and variant.source == "template" and variant.attempts == 3 and variant.valid and variant.errors
@@ -253,7 +299,7 @@ def test_plan_design_select_api(api, sample_bytes):
     body = res.json()
     assert body["plan"]["valid"] and body["design"]["variants"] == []
 
-    visuals = [{k: v[k] for k in ("role", "type", "title", "measures", "dimension", "sort", "purpose", "question_id", "text")} for v in body["plan"]["visuals"]]
+    visuals = [{k: v[k] for k in ("role", "type", "title", "measures", "dimension", "sort", "purpose", "question_id", "text", "page")} for v in body["plan"]["visuals"]]
     chart = next(v for v in visuals if v["role"] == "chart")
     chart["type"] = "clustered_column"
     saved = api.put(f"/api/projects/{pid}/plan", json={"title": "Shop Board", "visuals": visuals}).json()
@@ -317,6 +363,12 @@ def test_plans_and_templates_on_random_datasets(batch):
             continue
         plan, measures, dims = _plan(ctx, with_insights=seed % 2 == 0)
         assert plan.valid, f"seed {seed}: {plan.issues}"
-        html = template_html(plan, CTX, ["dark_futuristic", "light_elegant", "glassmorphism"][seed % 3])
-        errors, _ = check(html, plan, prefer_browser=False)
-        assert errors == [], f"seed {seed}: {errors}"
+        for n in range(1, len(plan.pages) + 1):
+            page = page_plan(plan, n)
+            for name in suggest(page)[:3]:  # the layouts Option B would use
+                arr = arrange(page, name)
+                assert layout_check(arr) == [], f"seed {seed} page {n} {name}: {layout_check(arr)}"
+                placed = arr.plan(page)
+                html = template_html(placed, CTX, ["dark_futuristic", "light_elegant", "glassmorphism"][seed % 3], arrangement=arr)
+                errors, _ = check(html, placed, prefer_browser=False)
+                assert errors == [], f"seed {seed} page {n} {name}: {errors}"

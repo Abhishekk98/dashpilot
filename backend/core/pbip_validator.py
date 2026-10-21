@@ -303,17 +303,24 @@ def validate(files: dict[str, bytes], width: int = 1280, height: int = 720) -> l
 
     # 5. Layout
     layout_issues: list[str] = []
-    boxes = []
-    for data in visuals.values():
+    by_page: dict[str, list] = {}
+    for path, data in visuals.items():
         p = data["position"]
         box = SimpleNamespace(x=p["x"], y=p["y"], w=p["width"], h=p["height"], name=data["name"])
         if box.x < 0 or box.y < 0 or box.x + box.w > width + 0.5 or box.y + box.h > height + 0.5:
             layout_issues.append(f"Visual {box.name} is outside the {width}x{height} page.")
-        boxes.append(box)
-    for i, a in enumerate(boxes):
-        for b in boxes[i + 1:]:
-            if overlap(a, b):
-                layout_issues.append(f"Visuals {a.name} and {b.name} overlap.")
+        by_page.setdefault(path.split("/visuals/")[0], []).append(box)
+    for boxes in by_page.values():  # visuals only collide with visuals on the same page
+        for i, a in enumerate(boxes):
+            for b in boxes[i + 1:]:
+                if overlap(a, b):
+                    layout_issues.append(f"Visuals {a.name} and {b.name} overlap.")
+    pages = [p for p in parsed if p.endswith("/page.json")]
+    for path, data in parsed.items():
+        if path.endswith("/pages.json"):
+            for name in data.get("pageOrder", []):
+                if not any(p.endswith(f"/pages/{name}/page.json") for p in pages):
+                    layout_issues.append(f"pages.json lists page {name}, which is missing.")
     maps = [d["name"] for d in visuals.values() if d.get("visual", {}).get("visualType") == "azureMap"]
     if maps:
         layout_issues_warn = [f"{len(maps)} map visual(s): Power BI shows them only when the Azure Maps tenant setting is on "
@@ -325,9 +332,10 @@ def validate(files: dict[str, bytes], width: int = 1280, height: int = 720) -> l
         if d.get("visual", {}).get("visualType") == "slicer" and "'Between'" in json.dumps(mode) and d["position"]["width"] < DATE_RANGE_MIN_W:
             layout_issues_warn.append(f"The date range slicer {d['name']} is {d['position']['width']:.0f}px wide; its two dates need about "
                                       f"{DATE_RANGE_MIN_W}px. Give the Date Range filter a wider box in the design.")
-    checks.append(Check(id="layout", label="Report page & visual positions", count=len(visuals),
+    checks.append(Check(id="layout", label="Report pages & visual positions", count=len(visuals),
                         status="fail" if layout_issues else "warn" if layout_issues_warn else "pass",
-                        detail=f"{len(visuals)} visuals on a {width}×{height} page", issues=(layout_issues + layout_issues_warn)[:20]))
+                        detail=f"{len(visuals)} visuals on {len(pages)} page{'s' if len(pages) != 1 else ''} of {width}×{height}",
+                        issues=(layout_issues + layout_issues_warn)[:20]))
 
     # 6. Resources and cross-file references
     res_issues: list[str] = []

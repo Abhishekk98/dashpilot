@@ -143,8 +143,12 @@ def select_variant(store: ProjectStore, project: Project, llm: LLMProvider | Non
         state.selected, state.selected_method, state.selected_label = variant_id, method, f"Option {method} · {chosen.label}"
     store.write_json(project.id, DESIGN_FILE, state.model_dump(mode="json", exclude={"stale", "selected_stale"}))
     state = _design(store, project, response.plan)
-    # The chosen page is what Design Import (Step 8) reads.
-    path = store.project_dir(project.id) / "design" / "selected.html"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(chosen.html, encoding="utf-8")
+    # The chosen pages are what Design Import (Step 8) reads: selected.html, selected_p2.html, ...
+    folder = store.project_dir(project.id) / "design"
+    folder.mkdir(parents=True, exist_ok=True)
+    for old in folder.glob("selected_p*.html"):
+        old.unlink()
+    pages = stitch_import.stitch_pages(store, project) if variant_id == stitch_import.VARIANT_ID else (chosen.pages or [chosen.html])
+    for page, html in enumerate(pages, 1):
+        (folder / ("selected.html" if page == 1 else f"selected_p{page}.html")).write_text(html, encoding="utf-8")
     return PlanResponse(plan=response.plan, design=state)

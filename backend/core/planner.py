@@ -1,8 +1,12 @@
-"""Dashboard plan: one 1280x720 page with slicers, KPI cards, charts and a Key Insights box. (Spec Module 8)
+"""Dashboard plan: WHAT the dashboard shows, on 1-2 pages of 1280x720 (Spec Module 8).
 
-Chart choice and layout are rule-based and deterministic; the LLM may only polish titles and
+The plan holds the visuals (role, type, title, fields, sort, purpose) and the page each one is on;
+slicers appear on every page. WHERE they go is decided by the design the user picks
+(core.design_layouts for DashPilot designs, the reference image for Option C, Google Stitch for
+Option A). Each visual still carries a neutral grid `box`, used only for the plan preview and as a
+fallback. Chart choice is rule-based and deterministic; the LLM may only polish titles and
 purposes (never numbers, types or fields). A validator keeps the plan to Power BI native visuals,
-Passed measures, real model fields and a non-overlapping layout.
+Passed measures and real model fields.
 """
 
 from __future__ import annotations
@@ -35,7 +39,11 @@ VisualType = Literal[
 CHART_TYPES = ["line", "area", "clustered_bar", "clustered_column", "stacked_bar", "stacked_column", "donut", "map",
                "filled_map", "table", "matrix", "gauge", "scatter", "waterfall", "funnel"]
 Role = Literal["slicer", "kpi", "chart", "insights"]
-MAX_KPIS, MAX_CHARTS, MIN_CHARTS = 5, 6, 1
+MAX_KPIS, MAX_CHARTS, MIN_CHARTS = 5, 6, 1  # per page
+MAX_PICK = 7  # charts the rules pick for the whole dashboard
+MAX_PAGES = 2
+SPLIT_AT = 5  # from this many charts the plan gets a second "Details" page
+PAGE_NAMES = ["Overview", "Details"]
 
 
 # --- models -------------------------------------------------------------------------
@@ -58,7 +66,8 @@ class PlanVisual(BaseModel):
     purpose: str = Field(default="", max_length=300)
     question_id: str | None = None
     text: list[str] = []  # Key Insights lines (text_box only)
-    box: Box = Box(x=0, y=0, w=0, h=0)
+    page: int = Field(default=1, ge=1, le=MAX_PAGES)  # slicers are shown on every page
+    box: Box = Box(x=0, y=0, w=0, h=0)  # neutral grid position (preview/fallback; designs place visuals themselves)
 
 
 class DimensionOption(BaseModel):
@@ -73,6 +82,7 @@ class DashboardPlan(BaseModel):
     subtitle: str = ""
     width: int = CANVAS_W
     height: int = CANVAS_H
+    pages: list[str] = Field(default_factory=lambda: PAGE_NAMES[:1])
     visuals: list[PlanVisual]
     source: Literal["rules", "ai"] = "rules"
     edited: bool = False
@@ -97,6 +107,7 @@ class VisualInput(BaseModel):
     purpose: str = Field(default="", max_length=300)
     question_id: str | None = None
     text: list[str] = []
+    page: int = Field(default=1, ge=1, le=MAX_PAGES)
 
 
 # --- inputs ---------------------------------------------------------------------------
@@ -175,7 +186,7 @@ def _pick_charts(measures: list[Measure], dims: list[DimensionOption], insights:
     used: set[str] = set()
 
     def add(kind: str, vtype: str, title: str, ms: list[str], dim: DimensionOption | None, sort: str | None) -> None:
-        if len(charts) >= MAX_CHARTS or any(c.title == title or (c.type == vtype and c.measures == ms and c.dimension == (dim.field if dim else None)) for c in charts):
+        if len(charts) >= MAX_PICK or any(c.title == title or (c.type == vtype and c.measures == ms and c.dimension == (dim.field if dim else None)) for c in charts):
             return
         qid, purpose = _question_for(kind, dim.field if dim else None, insights, used)
         fallback = _PURPOSE[kind].format(m=ms[0], d=dim.label if dim else "category")
@@ -205,9 +216,9 @@ def _pick_charts(measures: list[Measure], dims: list[DimensionOption], insights:
         detail = ranked[1] if len(ranked) > 1 else ranked[0]
         extra = [m for m in (count, rates[0] if rates else None) if m and m != primary][:2]
         add("detail", "table", f"{detail.label.title()} Details", [primary, *extra], detail, "desc")
-    if "Day of Week" in dates and len(charts) < 4:
+    if "Day of Week" in dates and (len(charts) < 4 or len(charts) >= SPLIT_AT):  # fill a Details page
         add("weekday", "clustered_column", f"{primary} by Day of Week", [primary], dates["Day of Week"], None)
-    if len(charts) < 4 and count and count != primary and ranked:
+    if (len(charts) < 4 or len(charts) >= SPLIT_AT) and count and count != primary and ranked:
         add("top", "clustered_bar", f"{count} by {ranked[0].label.title()}", [count], ranked[0], "desc")
     if not charts:  # no date or category to slice by: a gauge is the one chart that needs no axis
         charts.append(PlanVisual(id="", role="chart", type="gauge", title=f"{primary} Gauge", measures=[primary],
@@ -245,8 +256,51 @@ def _insights_box(insights: InsightPlan | None) -> PlanVisual:
 
 # --- layout ---------------------------------------------------------------------------
 
+def _assign_ids(visuals: list[PlanVisual]) -> None:
+    for i, v in enumerate(visuals):
+        prefix = {"slicer": "slicer", "kpi": "kpi", "chart": "visual", "insights": "insights"}[v.role]
+        v.id = v.id or f"{prefix}_{i + 1}"
+
+
+def paginate(visuals: list[PlanVisual]) -> None:
+    """Rules: from SPLIT_AT charts on, the first three stay on the Overview (with KPIs and insights)
+    and the rest move to a Details page."""
+    charts = [v for v in visuals if v.role == "chart"]
+    for v in visuals:
+        v.page = 1
+    if len(charts) >= SPLIT_AT:
+        for v in charts[3:]:
+            v.page = 2
+
+
+def page_count(visuals: list[PlanVisual]) -> int:
+    return max([v.page for v in visuals if v.role != "slicer"] or [1])
+
+
+def on_page(v: PlanVisual, page: int) -> bool:
+    return v.role == "slicer" or v.page == page
+
+
+def layout_pages(visuals: list[PlanVisual]) -> list[PlanVisual]:
+    """Ids for every visual, then the neutral grid per page (slicers share one position on all pages)."""
+    order = ([v for v in visuals if v.role == "slicer"] + [v for v in visuals if v.role == "kpi"]
+             + sorted([v for v in visuals if v.role == "chart"], key=lambda v: v.page) + [v for v in visuals if v.role == "insights"])
+    _assign_ids(order)
+    for page in range(1, page_count(order) + 1):
+        layout([v for v in order if on_page(v, page)])
+    return order
+
+
+def page_plan(plan: DashboardPlan, page: int) -> DashboardPlan:
+    """One page of the plan as a single-page plan (what designs, the import and the builder work with)."""
+    visuals = [v.model_copy(deep=True) for v in plan.visuals if on_page(v, page)]
+    name = plan.pages[page - 1] if page <= len(plan.pages) else PAGE_NAMES[page - 1]
+    return plan.model_copy(update={"visuals": visuals, "pages": [name],
+                                   "subtitle": plan.subtitle if page == 1 else name})
+
+
 def layout(visuals: list[PlanVisual]) -> list[PlanVisual]:
-    """Deterministic 1280x720 grid: top bar with slicers, KPI row, two rows of charts + insights."""
+    """Neutral 1280x720 grid for one page: top bar with slicers, KPI row, rows of charts + insights."""
     slicers = [v for v in visuals if v.role == "slicer"]
     kpis = [v for v in visuals if v.role == "kpi"]
     charts = [v for v in visuals if v.role == "chart"]
@@ -281,9 +335,7 @@ def layout(visuals: list[PlanVisual]) -> list[PlanVisual]:
                 tiles[k].box = Box(x=MARGIN + c * (tw + GAP), y=top + r * (rh + GAP), w=tw, h=rh)
                 k += 1
     order = slicers + kpis + charts + boxes
-    for i, v in enumerate(order):
-        prefix = {"slicer": "slicer", "kpi": "kpi", "chart": "visual", "insights": "insights"}[v.role]
-        v.id = v.id or f"{prefix}_{i + 1}"
+    _assign_ids(order)
     return order
 
 
@@ -297,13 +349,18 @@ def validate(plan: DashboardPlan, measures: list[Measure], dims: list[DimensionO
     passed = {m.name for m in _passed(measures)}
     fields = {d.field for d in dims}
     issues = []
-    roles = [v.role for v in plan.visuals]
-    if roles.count("kpi") > MAX_KPIS:
-        issues.append(f"At most {MAX_KPIS} KPI cards fit the top row.")
-    if roles.count("chart") > MAX_CHARTS:
-        issues.append(f"At most {MAX_CHARTS} charts fit one page.")
-    if roles.count("chart") < MIN_CHARTS:
-        issues.append("Add at least one chart.")
+    pages = page_count(plan.visuals)
+    if len(plan.pages) != pages:
+        issues.append(f"The plan has {len(plan.pages)} page names for {pages} page(s).")
+    for page in range(1, pages + 1):
+        roles = [v.role for v in plan.visuals if v.page == page and v.role != "slicer"]
+        where = f" on page {page}" if pages > 1 else ""
+        if roles.count("kpi") > MAX_KPIS:
+            issues.append(f"At most {MAX_KPIS} KPI cards fit{where or ' one page'}.")
+        if roles.count("chart") > MAX_CHARTS:
+            issues.append(f"At most {MAX_CHARTS} charts fit{where or ' one page'}; move some to {'the other page' if pages > 1 else 'a second page'}.")
+        if roles.count("chart") < MIN_CHARTS:
+            issues.append(f"Add at least one chart{where}.")
     seen_ids, seen_titles, seen_shapes = set(), set(), set()
     for v in plan.visuals:
         label = f"'{v.title}'"
@@ -341,10 +398,12 @@ def validate(plan: DashboardPlan, measures: list[Measure], dims: list[DimensionO
         b = v.box
         if b.x < 0 or b.y < 0 or b.x + b.w > plan.width or b.y + b.h > plan.height or b.w <= 0 or b.h <= 0:
             issues.append(f"{label} is outside the 1280x720 canvas.")
-    for i, a in enumerate(plan.visuals):
-        for b in plan.visuals[i + 1:]:
-            if _overlap(a.box, b.box):
-                issues.append(f"'{a.title}' overlaps '{b.title}'.")
+    for page in range(1, pages + 1):  # the neutral grid, per page
+        here = [v for v in plan.visuals if on_page(v, page)]
+        for i, a in enumerate(here):
+            for b in here[i + 1:]:
+                if _overlap(a.box, b.box):
+                    issues.append(f"'{a.title}' overlaps '{b.title}'.")
     return list(dict.fromkeys(issues))
 
 
@@ -353,8 +412,10 @@ def validate(plan: DashboardPlan, measures: list[Measure], dims: list[DimensionO
 def build_plan(title: str, model: ModelPlan, report: QualityReport, measures: list[Measure], cards: list[str],
                insights: InsightPlan | None) -> DashboardPlan:
     dims = dimension_options(model, report)
-    visuals = layout(_slicers(dims) + _kpis(measures, cards) + _pick_charts(measures, dims, insights) + [_insights_box(insights)])
-    plan = DashboardPlan(title=title, subtitle="Executive overview", visuals=visuals)
+    visuals = _slicers(dims) + _kpis(measures, cards) + _pick_charts(measures, dims, insights) + [_insights_box(insights)]
+    paginate(visuals)
+    visuals = layout_pages(visuals)
+    plan = DashboardPlan(title=title, subtitle="Executive overview", visuals=visuals, pages=PAGE_NAMES[:page_count(visuals)])
     return finish(plan, measures, dims)
 
 
@@ -368,9 +429,18 @@ def finish(plan: DashboardPlan, measures: list[Measure], dims: list[DimensionOpt
 
 def apply_edit(plan: DashboardPlan, items: list[VisualInput], measures: list[Measure], dims: list[DimensionOption],
                title: str | None = None) -> DashboardPlan:
-    """User edits (types, fields, order, add/remove) -> re-laid-out, re-validated plan."""
+    """User edits (types, fields, pages, order, add/remove) -> re-validated plan with a fresh neutral grid."""
     visuals = [PlanVisual(**i.model_dump(exclude={"id"}), id="") for i in items]
-    new = DashboardPlan(title=(title or plan.title)[:80], subtitle=plan.subtitle, visuals=layout(visuals), source=plan.source, edited=True)
+    for v in visuals:
+        if v.role == "slicer":
+            v.page = 1
+    if page_count(visuals) == 2 and not any(v.page == 1 and v.role != "slicer" for v in visuals):
+        for v in visuals:  # everything moved to page 2: that is just one page
+            v.page = 1
+    visuals = layout_pages(visuals)
+    pages = page_count(visuals)
+    names = (plan.pages + PAGE_NAMES[len(plan.pages):])[:pages]
+    new = DashboardPlan(title=(title or plan.title)[:80], subtitle=plan.subtitle, visuals=visuals, pages=names, source=plan.source, edited=True)
     return finish(new, measures, dims)
 
 

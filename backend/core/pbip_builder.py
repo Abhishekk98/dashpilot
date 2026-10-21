@@ -23,7 +23,7 @@ import hashlib
 import json
 import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from core.cleaning import PipelineResult
@@ -49,8 +49,17 @@ SCHEMAS = {
 }
 THEME_FILE = "DashPilotTheme.json"
 BACKGROUND_FILE = "DashPilotBackground.png"
-PAGE_NAME = "dashpilot0page0000001"
+PAGE_NAME = "dashpilot0page0000001"  # page n: dashpilot0page000000n
 DATE_SLICER_FIELD = f"{tmdl.DATE_TABLE}[Date]"
+
+
+@dataclass
+class PageInput:
+    """One report page: its part of the plan (planner.page_plan) and its Step 8 import."""
+    plan: DashboardPlan
+    boxes: list[DetectedBox]
+    mapping: list[MappingItem]
+    background: bytes
 
 
 @dataclass
@@ -59,13 +68,22 @@ class BuildInputs:
     model: ModelPlan
     cleaned: dict[str, PipelineResult]
     measures: list[Measure]  # every measure without errors (the model); visuals use Passed ones
-    plan: DashboardPlan
+    plan: DashboardPlan  # page 1 (planner.page_plan); further pages in extra_pages
     boxes: list[DetectedBox]
     mapping: list[MappingItem]
     theme: dict
     background: bytes
     sources: list[tuple[str, bytes]]  # (filename, original bytes)
     data_folder: str
+    extra_pages: list[PageInput] = field(default_factory=list)
+
+    @property
+    def pages(self) -> list[PageInput]:
+        return [PageInput(self.plan, self.boxes, self.mapping, self.background), *self.extra_pages]
+
+
+def page_name(page: int) -> str:
+    return f"dashpilot0page{page:07d}"
 
 
 # --- names ------------------------------------------------------------------------------------
@@ -253,12 +271,10 @@ def kpi_display_measures(inp: BuildInputs) -> list:
     """Hidden helper measures for the KPI cards drawn left/right-aligned (one per measure used)."""
     from types import SimpleNamespace  # noqa: PLC0415
 
-    boxes = {b.id: b for b in inp.boxes}
-    mapping = {m.visual_id: m for m in inp.mapping}
     by_name = {m.name: m for m in inp.measures}
     out, seen = [], set()
-    for v in inp.plan.visuals:
-        item = mapping.get(v.id)
+    placed = [(v, {m.visual_id: m for m in pg.mapping}.get(v.id), {b.id: b for b in pg.boxes}) for pg in inp.pages for v in pg.plan.visuals]
+    for v, item, boxes in placed:
         val = kpi_value(v, item, boxes.get(item.box_id or "")) if item and item.placed else None
         if val is None or val.align == "center" or not v.measures or v.measures[0] in seen or v.measures[0] not in by_name:
             continue
@@ -276,7 +292,8 @@ def kpi_value(v: PlanVisual, item: MappingItem, box: DetectedBox | None):
     return box.value
 
 
-def visual_json(v: PlanVisual, item: MappingItem, box: DetectedBox | None, order: int, tokens: dict[str, str]) -> dict:
+def visual_json(v: PlanVisual, item: MappingItem, box: DetectedBox | None, order: int, tokens: dict[str, str], page: int = 1,
+                sync: bool = False) -> dict:
     val = kpi_value(v, item, box)
     aligned = val is not None and val.align != "center"
     tpl = template("kpi_left" if aligned else v.type)
@@ -338,10 +355,12 @@ def visual_json(v: PlanVisual, item: MappingItem, box: DetectedBox | None, order
         "title": {"show": show_title, **({"text": v.title, "fontColor": tokens["text"], "fontFamily": "Segoe UI Semibold", "fontSize": 11} if show_title else {})},
     }
     visual["visualContainerObjects"] = objects(container)
+    if v.role == "slicer" and sync:  # the same slicer on every page keeps one selection
+        visual["syncGroup"] = {"groupName": _id("sync", v.id), "fieldChanges": True, "filterChanges": True}
     visual["drillFilterOtherVisuals"] = True
     return {
         "$schema": SCHEMAS["visual"],
-        "name": _id("visual", v.id),
+        "name": _id("visual", v.id) if page == 1 else _id("visual", f"p{page}", v.id),
         "position": {"x": x, "y": y, "z": (order + 1) * 1000, "height": h, "width": w, "tabOrder": (order + 1) * 1000},
         "visual": visual,
     }
@@ -349,14 +368,40 @@ def visual_json(v: PlanVisual, item: MappingItem, box: DetectedBox | None, order
 
 # --- report -------------------------------------------------------------------------------------
 
+def background_file(page: int) -> str:
+    return BACKGROUND_FILE if page == 1 else BACKGROUND_FILE.replace(".png", f"_p{page}.png")
+
+
+def _page_json(name: str, display: str, plan: DashboardPlan, background: str, canvas: str) -> dict:
+    return {
+        "$schema": SCHEMAS["page"],
+        "name": name,
+        "displayName": display[:100] or "Dashboard",
+        "displayOption": "FitToPage",
+        "height": plan.height,
+        "width": plan.width,
+        "objects": {
+            "background": [{"properties": {
+                "image": {"image": {
+                    "name": literal(background),
+                    "url": {"expr": {"ResourcePackageItem": {"PackageName": "RegisteredResources", "PackageType": 1, "ItemName": background}}},
+                    "scaling": literal("Fit"),
+                }},
+                "transparency": literal(0),
+            }}],
+            "outspace": [{"properties": {"color": color(canvas)}}],
+        },
+    }
+
+
 def _report_files(inp: BuildInputs, root: str) -> dict[str, bytes]:
     d = f"{root}/definition"
-    boxes = {b.id: b for b in inp.boxes}
-    mapping = {m.visual_id: m for m in inp.mapping}
+    pages = inp.pages
     palette_muted = inp.theme.get("textClasses", {}).get("label", {}).get("color")
     tokens = _tokens(inp.theme, palette_muted)
     canvas = inp.theme.get("background", "#FFFFFF")
     version = {"visual": "2.13.0", "report": "3.3.0", "page": "2.1.0"}
+    names = [page_name(n) for n in range(1, len(pages) + 1)]
     files: dict[str, bytes] = {
         f"{root}/definition.pbir": _json({"$schema": SCHEMAS["pbir"], "version": "4.0",
                                           "datasetReference": {"byPath": {"path": f"../{folder_name(inp.project_name)}.SemanticModel"}}}),
@@ -368,40 +413,27 @@ def _report_files(inp: BuildInputs, root: str) -> dict[str, bytes]:
             "themeCollection": {"customTheme": {"name": THEME_FILE, "reportVersionAtImport": version, "type": "RegisteredResources"}},
             "resourcePackages": [{"name": "RegisteredResources", "type": "RegisteredResources", "items": [
                 {"name": THEME_FILE, "path": THEME_FILE, "type": "CustomTheme"},
-                {"name": BACKGROUND_FILE, "path": BACKGROUND_FILE, "type": "Image"},
+                *({"name": background_file(n), "path": background_file(n), "type": "Image"} for n in range(1, len(pages) + 1)),
             ]}],
             "settings": {"useStylableVisualContainerHeader": True, "defaultDrillFilterOtherVisuals": True,
                          "allowChangeFilterTypes": True, "useEnhancedTooltips": True},
         }),
-        f"{d}/pages/pages.json": _json({"$schema": SCHEMAS["pages"], "pageOrder": [PAGE_NAME], "activePageName": PAGE_NAME}),
-        f"{d}/pages/{PAGE_NAME}/page.json": _json({
-            "$schema": SCHEMAS["page"],
-            "name": PAGE_NAME,
-            "displayName": inp.plan.title[:100] or "Dashboard",
-            "displayOption": "FitToPage",
-            "height": inp.plan.height,
-            "width": inp.plan.width,
-            "objects": {
-                "background": [{"properties": {
-                    "image": {"image": {
-                        "name": literal(BACKGROUND_FILE),
-                        "url": {"expr": {"ResourcePackageItem": {"PackageName": "RegisteredResources", "PackageType": 1, "ItemName": BACKGROUND_FILE}}},
-                        "scaling": literal("Fit"),
-                    }},
-                    "transparency": literal(0),
-                }}],
-                "outspace": [{"properties": {"color": color(canvas)}}],
-            },
-        }),
+        f"{d}/pages/pages.json": _json({"$schema": SCHEMAS["pages"], "pageOrder": names, "activePageName": names[0]}),
         f"{root}/StaticResources/RegisteredResources/{THEME_FILE}": _json(inp.theme),
-        f"{root}/StaticResources/RegisteredResources/{BACKGROUND_FILE}": inp.background,
     }
-    for order, v in enumerate(inp.plan.visuals):
-        item = mapping.get(v.id)
-        if item is None or not item.placed:
-            continue
-        data = visual_json(v, item, boxes.get(item.box_id or ""), order, tokens)
-        files[f"{d}/pages/{PAGE_NAME}/visuals/{data['name']}/visual.json"] = _json(data)
+    for n, pg in enumerate(pages, 1):
+        # Page 1 is named after the dashboard; further pages by their plan name ("Details").
+        display = inp.plan.title if n == 1 else (pg.plan.pages[0] if pg.plan.pages else f"Page {n}")
+        files[f"{d}/pages/{names[n - 1]}/page.json"] = _json(_page_json(names[n - 1], display, pg.plan, background_file(n), canvas))
+        files[f"{root}/StaticResources/RegisteredResources/{background_file(n)}"] = pg.background
+        boxes = {b.id: b for b in pg.boxes}
+        mapping = {m.visual_id: m for m in pg.mapping}
+        for order, v in enumerate(pg.plan.visuals):
+            item = mapping.get(v.id)
+            if item is None or not item.placed:
+                continue
+            data = visual_json(v, item, boxes.get(item.box_id or ""), order, tokens, n, sync=len(pages) > 1)
+            files[f"{d}/pages/{names[n - 1]}/visuals/{data['name']}/visual.json"] = _json(data)
     return files
 
 
@@ -431,7 +463,7 @@ Every table reads its file as `DataFolder & "<file name>"`; the build set DataFo
 - `{folder}.SemanticModel` — tables, relationships, date table and the `_Measures` table (TMDL);
   every table has its Power Query (M) with the cleaning steps from DashPilot, reading your original files,
   so a refresh with updated files is cleaned the same way.
-- `{folder}.Report` — one 1280×720 page (PBIR format), background image and theme in
+- `{folder}.Report` — {pages} page(s) of 1280×720 (PBIR format), background images and theme in
   `StaticResources/RegisteredResources`.
 - `Data` — your uploaded files (read by Power Query); `Data/Cleaned` — the cleaned tables as CSV, for reference.
 - `Open Dashboard.cmd` — sets DataFolder and opens the dashboard.
@@ -459,7 +491,8 @@ def build(inp: BuildInputs) -> dict[str, bytes]:
             files[f"Data/Cleaned/{t.name}.csv"] = inp.cleaned[t.name].df.to_csv(index=False).encode("utf-8-sig")
     included = sum(1 for t in inp.model.tables if t.included) + (1 if inp.model.date_table.enabled else 0)
     files["README.md"] = README.format(name=inp.project_name, folder=folder, data_folder=inp.data_folder,
-                                       measures=len(inp.measures), visuals=len(inp.plan.visuals), tables=included).encode("utf-8")
+                                       measures=len(inp.measures), visuals=sum(len(pg.plan.visuals) for pg in inp.pages), tables=included,
+                                       pages=len(inp.pages)).encode("utf-8")
     files[".gitignore"] = b"**/.pbi/localSettings.json\n**/.pbi/cache.abf\n"
     files[OPEN_CMD_NAME] = OPEN_CMD
     return files

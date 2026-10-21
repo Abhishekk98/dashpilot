@@ -1,6 +1,7 @@
 """Glue between stored projects and the design import (keeps routes thin).
 
-Files under storage/{id}/design/ (read by the PBIP builder in Step 9):
+One import per plan page: page 1 lives in storage/{id}/design/, page n in design/p{n}/.
+Files per page (read by the PBIP builder in Step 9):
   source.html      the imported design (Option B's selected.html, or the uploaded file)
   import.json      detected boxes, mapping, palette, fonts, theme, issues
   background.png   1280x720 canvas with the mapped cards' contents hidden
@@ -24,13 +25,13 @@ from core.design_fidelity import FidelityReport, score
 from core.design_import import (
     DetectedBox, MappingItem, ThemeColor, build_theme, extract, match, render_design, title_kept, validate_mapping,
 )
-from core.planner import DashboardPlan, PlanVisual
+from core.planner import DashboardPlan, PlanVisual, page_plan
 from core.planner_service import DESIGN_FILE, PLAN_FILE
 from core.projects import Project, ProjectStore
 from llm import LLMProvider
 
 logger = logging.getLogger(__name__)
-IMPORT_FILE = "design/import.json"
+IMPORT_FILE = "design/import.json"  # page 1; page n: design/p{n}/import.json
 
 
 class ImportError_(ValueError):
@@ -67,12 +68,30 @@ class ImportResponse(BaseModel):
     visuals: list[PlanVisual]
     html: str
     notes: list[str] = []
+    page: int = 1
+    pages: list[str] = ["Overview"]
+
+
+def import_file(page: int) -> str:
+    return IMPORT_FILE if page == 1 else f"design/p{page}/import.json"
+
+
+def page_dir(store: ProjectStore, project: Project, page: int = 1):
+    path = store.project_dir(project.id) / "design" / ("" if page == 1 else f"p{page}")
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def _dir(store: ProjectStore, project: Project):
-    path = store.project_dir(project.id) / "design"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    return page_dir(store, project, 1)
+
+
+def _page(store: ProjectStore, project: Project, page: int) -> tuple[DashboardPlan, DashboardPlan]:
+    """(whole plan, the page as a single-page plan)."""
+    plan = _plan(store, project)
+    if not 1 <= page <= len(plan.pages):
+        raise ImportError_(f"The plan has {len(plan.pages)} page(s); there is no page {page}.")
+    return plan, page_plan(plan, page)
 
 
 def _plan(store: ProjectStore, project: Project) -> DashboardPlan:
@@ -89,8 +108,12 @@ def _hash(html: str) -> str:
     return hashlib.sha1(html.encode("utf-8")).hexdigest()[:16]
 
 
-def _selected(store: ProjectStore, project: Project) -> tuple[str, str] | None:
-    path = _dir(store, project) / "selected.html"
+def selected_name(page: int) -> str:
+    return "selected.html" if page == 1 else f"selected_p{page}.html"
+
+
+def _selected(store: ProjectStore, project: Project, page: int = 1) -> tuple[str, str] | None:
+    path = _dir(store, project) / selected_name(page)
     if not path.exists():
         return None
     design = store.read_json(project.id, DESIGN_FILE)
@@ -104,19 +127,20 @@ def _method(label: str) -> str:
     return {"Option A": "option_a", "Option C": "option_c"}.get(label[:8], "option_b")
 
 
-STITCH_SCREEN = "stitch/screen.png"  # Option A: Stitch's own screenshot from the export zip
+STITCH_SCREEN = "stitch/screen.png"  # Option A: Stitch's own screenshot from the export zip (page n: stitch/p{n}/screen.png)
 SOURCE_SCREEN = "source_screen.png"  # the screenshot belonging to the imported design (fidelity reference)
 
 
-def _stitch_screen(store: ProjectStore, project: Project) -> bytes | None:
-    path = _dir(store, project) / STITCH_SCREEN
+def _stitch_screen(store: ProjectStore, project: Project, page: int = 1) -> bytes | None:
+    path = _dir(store, project) / (STITCH_SCREEN if page == 1 else f"stitch/p{page}/screen.png")
     return path.read_bytes() if path.exists() else None
 
 
-def _finish(store: ProjectStore, project: Project, plan: DashboardPlan, imp: DesignImport, html: str) -> ImportResponse:
+def _finish(store: ProjectStore, project: Project, plan: DashboardPlan, imp: DesignImport, html: str, page: int = 1,
+            pages: list[str] | None = None) -> ImportResponse:
     imp.issues = validate_mapping(plan, imp.mapping, imp.boxes)
     imp.valid = not imp.issues
-    folder = _dir(store, project)
+    folder = page_dir(store, project, page)
     boxes = {b.id: b for b in imp.boxes}
     titles = {v.id: v.title for v in plan.visuals}
     for m in imp.mapping:
@@ -131,14 +155,14 @@ def _finish(store: ProjectStore, project: Project, plan: DashboardPlan, imp: Des
                          screen_path.read_bytes() if screen_path.exists() else None, imp.source_w, imp.source_h, imp.scale)
     imp.background_version = str(int(time.time() * 1000))
     (folder / "theme.json").write_text(json.dumps(imp.theme, indent=2), encoding="utf-8")
-    store.write_json(project.id, IMPORT_FILE, imp.model_dump(mode="json"))
-    return ImportResponse(design=imp, visuals=plan.visuals, html=html, notes=imp.notes)
+    store.write_json(project.id, import_file(page), imp.model_dump(mode="json"))
+    return ImportResponse(design=imp, visuals=plan.visuals, html=html, notes=imp.notes, page=page, pages=pages or plan.pages)
 
 
 def run_import(store: ProjectStore, project: Project, llm: LLMProvider | None, source: str, name: str, html: str,
-               scripts: bool = False, screen: bytes | None = None) -> ImportResponse:
-    plan = _plan(store, project)
-    folder = _dir(store, project)
+               scripts: bool = False, screen: bytes | None = None, page: int = 1) -> ImportResponse:
+    whole, plan = _page(store, project, page)
+    folder = page_dir(store, project, page)
     (folder / "source.html").write_text(html, encoding="utf-8")
     if screen:
         (folder / SOURCE_SCREEN).write_bytes(screen)
@@ -167,43 +191,50 @@ def run_import(store: ProjectStore, project: Project, llm: LLMProvider | None, s
         theme=build_theme(f"DashPilot {context.company_name or project.name}", found.palette, context.palette, found),
         notes=notes, skipped=found.skipped, imported_at=datetime.now(timezone.utc),
     )
-    return _finish(store, project, plan, imp, html)
+    return _finish(store, project, plan, imp, html, page, whole.pages)
 
 
-def get_import(store: ProjectStore, project: Project, llm: LLMProvider | None) -> ImportResponse:
-    """The saved import; re-imported automatically when the plan or the Step 7 design changed."""
-    plan = _plan(store, project)
-    stored = store.read_json(project.id, IMPORT_FILE)
-    selected = _selected(store, project)
+def get_import(store: ProjectStore, project: Project, llm: LLMProvider | None, page: int = 1) -> ImportResponse:
+    """The saved import of one page; re-imported automatically when the plan or the Step 7 design changed."""
+    whole, plan = _page(store, project, page)
+    stored = store.read_json(project.id, import_file(page))
+    selected = _selected(store, project, page)
     if stored:
         imp = DesignImport.model_validate(stored)
-        html = (_dir(store, project) / "source.html").read_text(encoding="utf-8")
+        html = (page_dir(store, project, page) / "source.html").read_text(encoding="utf-8")
         changed_design = imp.source != "upload" and selected is not None and _hash(selected[0]) != imp.source_hash
         if imp.plan_signature == plan_signature(plan) and not changed_design:
-            return ImportResponse(design=imp, visuals=plan.visuals, html=html, notes=[])
+            return ImportResponse(design=imp, visuals=plan.visuals, html=html, notes=[], page=page, pages=whole.pages)
         if imp.source == "upload":
-            screen = (_dir(store, project) / SOURCE_SCREEN)
-            res = run_import(store, project, llm, "upload", imp.source_name, html, imp.scripts, screen.read_bytes() if screen.exists() else None)
+            screen = (page_dir(store, project, page) / SOURCE_SCREEN)
+            res = run_import(store, project, llm, "upload", imp.source_name, html, imp.scripts, screen.read_bytes() if screen.exists() else None, page)
             res.notes.insert(0, "The dashboard plan changed, so the uploaded design was matched again.")
             return res
     if selected is None:
-        raise ImportError_("Select a design in Step 7 (Design Method) or upload an HTML design.")
-    res = use_selected(store, project, llm)
+        where = f" for page {page} ({whole.pages[page - 1]})" if len(whole.pages) > 1 else ""
+        raise ImportError_(f"Select a design in Step 7 (Design Method) or upload an HTML design{where}.")
+    res = use_selected(store, project, llm, page)
     if stored:
         res.notes.insert(0, "The plan or the selected design changed, so the design was imported again.")
     return res
 
 
-def use_selected(store: ProjectStore, project: Project, llm: LLMProvider | None) -> ImportResponse:
-    selected = _selected(store, project)
+def get_imports(store: ProjectStore, project: Project, llm: LLMProvider | None) -> list[ImportResponse]:
+    """Every page's import (the PBIP build needs all of them)."""
+    plan = _plan(store, project)
+    return [get_import(store, project, llm, page) for page in range(1, len(plan.pages) + 1)]
+
+
+def use_selected(store: ProjectStore, project: Project, llm: LLMProvider | None, page: int = 1) -> ImportResponse:
+    selected = _selected(store, project, page)
     if selected is None:
-        raise ImportError_("No design selected in Step 7 yet.")
+        raise ImportError_("No design selected in Step 7 yet." if page == 1 else f"The selected design has no page {page}; upload one for it.")
     method = _method(selected[1])
     return run_import(store, project, llm, method, selected[1], selected[0],
-                      screen=_stitch_screen(store, project) if method == "option_a" else None)
+                      screen=_stitch_screen(store, project, page) if method == "option_a" else None, page=page)
 
 
-def import_upload(store: ProjectStore, project: Project, llm: LLMProvider | None, filename: str, data: bytes) -> ImportResponse:
+def import_upload(store: ProjectStore, project: Project, llm: LLMProvider | None, filename: str, data: bytes, page: int = 1) -> ImportResponse:
     """Step 8 upload: a design's HTML, or a Google Stitch export zip (HTML + screen.png)."""
     from core.stitch_import import StitchError, read_export  # noqa: PLC0415
 
@@ -211,14 +242,14 @@ def import_upload(store: ProjectStore, project: Project, llm: LLMProvider | None
         export = read_export(filename, data)
     except StitchError as exc:
         raise ImportError_(str(exc)) from None
-    return run_import(store, project, llm, "upload", export.name, export.html, screen=export.screen)
+    return run_import(store, project, llm, "upload", export.name, export.html, screen=export.screen, page=page)
 
 
-def set_override(store: ProjectStore, project: Project, llm: LLMProvider | None, override: bool) -> ImportResponse:
+def set_override(store: ProjectStore, project: Project, llm: LLMProvider | None, override: bool, page: int = 1) -> ImportResponse:
     """Accept (or stop accepting) a fidelity below the threshold for the build."""
-    current = get_import(store, project, llm)
+    current = get_import(store, project, llm, page)
     current.design.fidelity_override = override
-    store.write_json(project.id, IMPORT_FILE, current.design.model_dump(mode="json"))
+    store.write_json(project.id, import_file(page), current.design.model_dump(mode="json"))
     return current
 
 
@@ -231,10 +262,10 @@ class MappingEdit(BaseModel):
     h: int = 0
 
 
-def save_mapping(store: ProjectStore, project: Project, llm: LLMProvider | None, items: list[MappingEdit]) -> ImportResponse:
-    current = get_import(store, project, llm)
+def save_mapping(store: ProjectStore, project: Project, llm: LLMProvider | None, items: list[MappingEdit], page: int = 1) -> ImportResponse:
+    current = get_import(store, project, llm, page)
     imp, plan_visuals = current.design, current.visuals
-    plan = _plan(store, project)
+    whole, plan = _page(store, project, page)
     boxes = {b.id: b for b in imp.boxes}
     before = {m.visual_id: m for m in imp.mapping}
     planned = [v.id for v in plan_visuals]
@@ -256,4 +287,4 @@ def save_mapping(store: ProjectStore, project: Project, llm: LLMProvider | None,
                                                     method="manual" if e.w > 0 else "none", score=1.0 if e.w > 0 else 0.0))
     imp.mapping = mapping
     imp.notes = []
-    return _finish(store, project, plan, imp, current.html)
+    return _finish(store, project, plan, imp, current.html, page, whole.pages)

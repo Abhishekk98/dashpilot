@@ -17,9 +17,10 @@ from pydantic import BaseModel
 from core import tmdl
 from core.dax_service import valid_measures
 from core.design_ai import plan_signature
-from core.design_import_service import ImportError_, _plan, get_import
+from core.design_import_service import ImportError_, _plan, get_imports, page_dir
 from core.modelling_service import build_with_results
-from core.pbip_builder import BuildInputs, build, folder_name
+from core.planner import page_plan
+from core.pbip_builder import BuildInputs, PageInput, build, folder_name
 from core.pbip_open import OpenError, TargetExists, clean_target, default_target, launch, save_copy
 from core.pbip_validator import Check, validate
 from core.projects import Project, ProjectStore
@@ -60,11 +61,16 @@ class BuildStatus(BaseModel):
     open_folder: str = ""  # default local folder for Save & Open in Power BI
 
 
-def _signature(store: ProjectStore, project: Project, llm: LLMProvider | None) -> tuple[str, object]:
-    imp = get_import(store, project, llm).design
-    raw = plan_signature(_plan(store, project)) + imp.background_version + "".join(
-        f"{m.visual_id}{m.box_id}{m.x},{m.y},{m.w},{m.h}{m.pbi_title}" for m in imp.mapping)
-    return hashlib.sha1(raw.encode()).hexdigest()[:16], imp
+def _signature(store: ProjectStore, project: Project, llm: LLMProvider | None) -> tuple[str, list]:
+    """(signature of plan + every page's mapping and design, every page's import)."""
+    imps = [r.design for r in get_imports(store, project, llm)]
+    raw = plan_signature(_plan(store, project)) + "".join(imp.background_version + "".join(
+        f"{m.visual_id}{m.box_id}{m.x},{m.y},{m.w},{m.h}{m.pbi_title}" for m in imp.mapping) for imp in imps)
+    return hashlib.sha1(raw.encode()).hexdigest()[:16], imps
+
+
+def _where(n: int, imps: list) -> str:
+    return f"Page {n}: " if len(imps) > 1 else ""
 
 
 def fidelity_blocked(imp) -> bool:
@@ -94,11 +100,12 @@ def get_status(store: ProjectStore, project: Project, llm: LLMProvider | None) -
     blockers: list[str] = []
     sig = None
     try:
-        sig, imp = _signature(store, project, llm)
-        if not imp.valid:
-            blockers.append("Finish the visual mapping in Step 8 (every visual needs one box, no overlaps).")
-        if fidelity_blocked(imp):
-            blockers.append(fidelity_message(imp))
+        sig, imps = _signature(store, project, llm)
+        for n, imp in enumerate(imps, 1):
+            if not imp.valid:
+                blockers.append(_where(n, imps) + "Finish the visual mapping in Step 8 (every visual needs one box, no overlaps).")
+            if fidelity_blocked(imp):
+                blockers.append(_where(n, imps) + fidelity_message(imp))
     except ImportError_ as exc:
         blockers.append(str(exc))
     stored = store.read_json(project.id, BUILD_FILE)
@@ -111,25 +118,27 @@ def get_status(store: ProjectStore, project: Project, llm: LLMProvider | None) -
 def build_project(store: ProjectStore, project: Project, llm: LLMProvider | None, data_folder: str | None) -> BuildStatus:
     folder_value = clean_data_folder(data_folder, project)
     try:
-        sig, imp = _signature(store, project, llm)
+        sig, imps = _signature(store, project, llm)
     except ImportError_ as exc:
         raise BuildError(str(exc)) from None
-    if not imp.valid:
-        raise BuildError("Finish the visual mapping in Step 8 first: " + "; ".join(imp.issues[:2]))
-    if fidelity_blocked(imp):
-        raise BuildError(fidelity_message(imp))
+    for n, imp in enumerate(imps, 1):
+        if not imp.valid:
+            raise BuildError(_where(n, imps) + "Finish the visual mapping in Step 8 first: " + "; ".join(imp.issues[:2]))
+        if fidelity_blocked(imp):
+            raise BuildError(_where(n, imps) + fidelity_message(imp))
     plan = _plan(store, project)
     model, results = build_with_results(store, project, llm)
     problems = tmdl.check(model)
     if problems:
         raise BuildError("The data model has problems: " + "; ".join(problems[:3]))
-    design_dir = store.project_dir(project.id) / "design"
+    pages = [PageInput(plan=page_plan(plan, n), boxes=imp.boxes, mapping=imp.mapping,
+                       background=(page_dir(store, project, n) / "background.png").read_bytes()) for n, imp in enumerate(imps, 1)]
+    first = pages[0]
     inputs = BuildInputs(
         project_name=project.name, model=model, cleaned=results, measures=valid_measures(store, project, llm),
-        plan=plan, boxes=imp.boxes, mapping=imp.mapping, theme=imp.theme,
-        background=(design_dir / "background.png").read_bytes(),
+        plan=first.plan, boxes=first.boxes, mapping=first.mapping, theme=imps[0].theme, background=first.background,
         sources=[(f.filename, store.file_path(project.id, f).read_bytes()) for f in project.files],
-        data_folder=folder_value,
+        data_folder=folder_value, extra_pages=pages[1:],
     )
     files = build(inputs)
     checks = validate(files, plan.width, plan.height)

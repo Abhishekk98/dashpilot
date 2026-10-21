@@ -13,6 +13,7 @@ from PIL import Image, ImageDraw
 from core.context import BusinessContext
 from core.design_fidelity import score
 from core.design_import import build_theme, extract, match, render_design, validate_mapping
+from core.planner import DashboardPlan, page_plan
 from core.stitch_import import StitchError, read_export
 from core.stitch_prompt import build as build_prompt
 from tests.stitch_like import stitch_export
@@ -26,7 +27,7 @@ needs_browser = pytest.mark.skipif(not _browser(), reason="needs Playwright with
 
 @pytest.fixture(scope="module")
 def plan():
-    return _plan(_ctx({n: (SAMPLES / n).read_bytes() for n in ("orders.csv", "customers.xlsx", "products.csv")}))[0]
+    return page_plan(_plan(_ctx({n: (SAMPLES / n).read_bytes() for n in ("orders.csv", "customers.xlsx", "products.csv")}))[0], 1)
 
 
 def _zip(files: dict[str, bytes], symlink: str | None = None) -> bytes:
@@ -165,12 +166,13 @@ def test_fidelity_against_stitch_screenshot(plan):
 @needs_browser
 def test_option_a_flow_and_fidelity_gate(api, sample_bytes):
     pid = _project(api, sample_bytes)
-    plan = api.get(f"/api/projects/{pid}/plan").json()["plan"]
+    whole = DashboardPlan.model_validate(api.get(f"/api/projects/{pid}/plan").json()["plan"])
+    assert whole.pages == ["Overview", "Details"]
+    plan = page_plan(whole, 1).model_dump(mode="json")
     prompt = api.get(f"/api/projects/{pid}/design/stitch/prompt?style=neon_tech").json()
     assert prompt["style"] == "neon_tech" and all(v["title"] in prompt["prompt"] for v in plan["visuals"])
 
-    from core.planner import DashboardPlan  # noqa: PLC0415
-    html = stitch_export(DashboardPlan.model_validate(plan))
+    html = stitch_export(page_plan(whole, 1))
     res = api.post(f"/api/projects/{pid}/design/stitch", files={"file": ("stitch_shop.zip", _zip({"stitch_shop/code.html": html.encode()}), "application/zip")})
     assert res.status_code == 200, res.text
     state = res.json()
@@ -180,6 +182,10 @@ def test_option_a_flow_and_fidelity_gate(api, sample_bytes):
 
     sel = api.post(f"/api/projects/{pid}/design/select", json={"id": "stitch"}).json()["design"]
     assert sel["selected_method"] == "A" and sel["selected_label"].startswith("Option A")
+    assert "page 2" in api.get(f"/api/projects/{pid}/build").json()["blockers"][0]  # one export per page
+    p2 = api.post(f"/api/projects/{pid}/design/stitch?page=2",
+                  files={"file": ("details.zip", _zip({"d/code.html": stitch_export(page_plan(whole, 2)).encode()}), "application/zip")}).json()
+    assert p2["page"] == 2 and p2["uploads"] == [True, True] and p2["design"]["valid"] and p2["upload"]["label"] == state["upload"]["label"]
     imp = api.get(f"/api/projects/{pid}/design/import").json()
     assert imp["design"]["source"] == "option_a" and imp["design"]["source_hash"] == d["source_hash"]  # reused, not re-imported
     assert api.get(f"/api/projects/{pid}/design/original.png").status_code == 200
@@ -224,7 +230,7 @@ def test_stitch_like_pages_on_random_datasets(batch):
         if ctx is None:
             continue
         try:
-            plan = _plan(ctx, with_insights=seed % 2 == 0)[0]
+            plan = page_plan(_plan(ctx, with_insights=seed % 2 == 0)[0], 1)
         except Exception:
             continue
         size = [(1280, 720), (1440, 900), (1366, 768)][seed % 3]

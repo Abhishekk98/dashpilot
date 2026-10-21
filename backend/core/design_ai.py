@@ -19,7 +19,8 @@ from pydantic import BaseModel
 
 from core.context import BrandPalette, BusinessContext
 from core.design_contract import check
-from core.planner import CANVAS_H, CANVAS_W, DashboardPlan, PlanVisual
+from core.design_layouts import LAYOUTS, Arrangement, arrange, suggest
+from core.planner import CANVAS_H, CANVAS_W, Box, DashboardPlan, PlanVisual, page_plan
 from llm import LLMError, LLMNotConfiguredError, LLMProvider, LLMRateLimitError
 
 logger = logging.getLogger(__name__)
@@ -45,10 +46,16 @@ class DesignVariant(BaseModel):
     valid: bool = True
     engine: str = "static"
     note: str | None = None
+    pages: list[str] = []  # HTML of every page (pages[0] == html); empty for single-page designs made before pages existed
+    layouts: list[str] = []  # core.design_layouts name per page
+
+    def page_html(self, page: int) -> str | None:
+        pages = self.pages or [self.html]
+        return pages[page - 1] if page <= len(pages) else None
 
 
 def plan_signature(plan: DashboardPlan) -> str:
-    payload = [(v.id, v.type, v.title, v.box.x, v.box.y, v.box.w, v.box.h) for v in plan.visuals] + [plan.title]
+    payload = [(v.id, v.type, v.title, v.page, v.box.x, v.box.y, v.box.w, v.box.h) for v in plan.visuals] + [plan.title, plan.pages]
     return hashlib.sha1(json.dumps(payload).encode()).hexdigest()[:16]
 
 
@@ -113,26 +120,44 @@ def _container(v: PlanVisual) -> str:
     return f'<div class="dp-card dp-visual" {attrs}><p class="dp-title">{e(v.title)}</p><div class="dp-chart" data-chart-area></div></div>'
 
 
+def _panel(kind: str, b: Box) -> str:
+    return f'<div class="dp-panel dp-panel-{kind}" style="left:{b.x}px;top:{b.y}px;width:{b.w}px;height:{b.h}px"></div>'
+
+
 def template_html(plan: DashboardPlan, context: BusinessContext, archetype: Archetype | None = None,
-                  theme: dict[str, str] | None = None, fonts: tuple[str, str, str] | None = None) -> str:
-    """Deterministic contract-compliant design (also the baseline the AI restyles). Option C passes its
-    own `theme` (same keys as _theme) and `fonts` built from a reference image's style profile."""
+                  theme: dict[str, str] | None = None, fonts: tuple[str, str, str] | None = None,
+                  arrangement: Arrangement | None = None, page_label: str = "") -> str:
+    """Deterministic contract-compliant design (also the baseline the AI restyles). `arrangement` places
+    the page's visuals (core.design_layouts; default: the plan's neutral grid). Option C passes its own
+    `theme` (same keys as _theme) and `fonts` built from a reference image's style profile."""
     t = theme or _theme(archetype or "light_elegant", context.palette)
     heading, body, link = fonts or _fonts(context.font_stack)
     e = htmllib.escape
     font_link = f'<link rel="stylesheet" href="{link}">' if link else ""
-    containers = "\n    ".join(_container(v) for v in plan.visuals)
+    visuals = arrangement.visuals if arrangement else plan.visuals
+    hb = arrangement.header if arrangement else Box(x=24, y=14, w=640, h=46)
+    panels = "".join(_panel(k, b) for k, b in (arrangement.panels if arrangement else []))
+    containers = "\n    ".join(_container(v) for v in visuals)
     brand = e(context.company_name or plan.title)
+    head_size = 22 if hb.w >= 420 else 19
+    chip = f'<span class="dp-chip">{e(page_label)}</span>' if page_label else ""
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>{e(plan.title)}</title>{font_link}
 <style>
   html, body {{ margin: 0; padding: 0; background: {t['page']}; }}
   .dp-canvas {{ position: relative; width: {CANVAS_W}px; height: {CANVAS_H}px; overflow: hidden; background: {t['canvas']};
     font-family: '{body}', 'Segoe UI', sans-serif; color: {t['title']}; }}
-  .dp-header {{ position: absolute; left: 24px; top: 14px; width: 640px; height: 46px; display: flex; align-items: center; gap: 12px; }}
+  .dp-header {{ position: absolute; left: {hb.x}px; top: {hb.y}px; width: {hb.w}px; height: {hb.h}px; display: flex; align-items: center; gap: 12px; }}
+  .dp-panel {{ position: absolute; box-sizing: border-box; }}
+  .dp-panel-rail {{ background: {t['card']}; border-right: {t['border']}; backdrop-filter: {t['blur']}; -webkit-backdrop-filter: {t['blur']}; }}
+  .dp-panel-band {{ background: linear-gradient(90deg, {t['area']}, transparent 85%); border-bottom: {t['border']}; }}
+  .dp-chip {{ display: inline-block; margin-left: 8px; padding: 2px 9px; border-radius: 999px; background: {t['area']}; border: {t['border']};
+    font: 500 10px '{body}', 'Segoe UI', sans-serif; letter-spacing: 0.06em; text-transform: uppercase; color: {t['muted']}; vertical-align: middle; }}
+  .dp-kpi-hero .dp-title {{ font-size: 15px; }}
+  .dp-kpi-hero .dp-kpi-bar {{ height: 4px; }}
   .dp-logo {{ width: 34px; height: 34px; border-radius: 10px; background: {t['accent']}; color: #111; display: flex; align-items: center;
     justify-content: center; font: 600 15px '{heading}', 'Segoe UI', sans-serif; }}
-  .dp-heading {{ font: 500 22px/1.1 '{heading}', 'Segoe UI', sans-serif; letter-spacing: -0.01em; color: {t['title']}; }}
+  .dp-heading {{ font: 500 {head_size}px/1.15 '{heading}', 'Segoe UI', sans-serif; letter-spacing: -0.01em; color: {t['title']}; }}
   .dp-sub {{ display: block; font: 400 11px '{body}', 'Segoe UI', sans-serif; color: {t['muted']}; margin-top: 3px; letter-spacing: 0.02em; }}
   .dp-card {{ position: absolute; box-sizing: border-box; background: {t['card']}; border: {t['border']}; border-radius: {t['radius']};
     box-shadow: {t['shadow']}; backdrop-filter: {t['blur']}; -webkit-backdrop-filter: {t['blur']}; padding: 12px 16px;
@@ -149,9 +174,9 @@ def template_html(plan: DashboardPlan, context: BusinessContext, archetype: Arch
   .dp-insights li {{ margin-bottom: 6px; }}
   .dp-insights li::marker {{ color: {t['accent']}; }}
 </style></head>
-<body><div class="dp-canvas" data-canvas style="width:{CANVAS_W}px;height:{CANVAS_H}px">
+<body><div class="dp-canvas" data-canvas style="width:{CANVAS_W}px;height:{CANVAS_H}px">{panels}
     <div class="dp-header"><div class="dp-logo" data-role="logo">{e(brand[:1].upper())}</div>
-      <div><span class="dp-heading">{e(plan.title)}</span><span class="dp-sub">{brand} &bull; {e(plan.subtitle)}</span></div></div>
+      <div><span class="dp-heading">{e(plan.title)}</span><span class="dp-sub">{brand} &bull; {e(plan.subtitle)}{chip}</span></div></div>
     {containers}
 </div></body></html>
 """
@@ -213,12 +238,54 @@ def generate_styled(plan: DashboardPlan, variant_id: str, label: str, style: str
                          engine=m.engine, note=f"AI design failed the contract after {attempts} attempts; built-in template used."), True
 
 
+def page_label(plan: DashboardPlan, page: int) -> str:
+    return f"{plan.pages[page - 1]} · {page}/{len(plan.pages)}" if len(plan.pages) > 1 else ""
+
+
+def combine(variant_id: str, label: str, parts: list[DesignVariant], layouts: list[str]) -> DesignVariant:
+    """One variant from its per-page results (page 1 is `html`)."""
+    notes = list(dict.fromkeys(p.note for p in parts if p.note))
+    return DesignVariant(
+        id=variant_id, label=label, html=parts[0].html, pages=[p.html for p in parts], layouts=layouts,
+        source="ai" if all(p.source == "ai" for p in parts) else "template", attempts=sum(p.attempts for p in parts),
+        errors=[e for p in parts for e in p.errors][:20], valid=all(p.valid for p in parts), engine=parts[0].engine,
+        note=" ".join(notes) or None,
+    )
+
+
+def generate_paged(plan: DashboardPlan, variant_id: str, label: str, layouts: list[str], page_html, style: str, palette: dict,
+                   fonts: str, llm: LLMProvider | None, prefer_browser: bool = True) -> tuple[DesignVariant, bool]:
+    """Every page of one variant: page_html(page_plan, arrangement, page_label) gives each page's baseline,
+    which the AI may restyle (generate_styled). Shared by Options B and C."""
+    parts, ai = [], llm
+    for page, layout in enumerate(layouts, 1):
+        sub = page_plan(plan, page)
+        arr = arrange(sub, layout)
+        placed = arr.plan(sub)
+        part, usable = generate_styled(placed, variant_id, label, style, palette, fonts, page_html(placed, arr, page_label(plan, page)),
+                                       ai, prefer_browser)
+        parts.append(part)
+        if not usable:
+            ai = None
+    return combine(variant_id, label, parts, layouts), ai is not None
+
+
+def variant_layouts(plan: DashboardPlan, index: int) -> list[str]:
+    """Layout per page for the index-th variant: each variant gets a different best-fitting layout."""
+    return [suggest(page_plan(plan, p))[index % len(LAYOUTS)] for p in range(1, len(plan.pages) + 1)]
+
+
 def generate_variant(plan: DashboardPlan, context: BusinessContext, archetype: Archetype, llm: LLMProvider | None,
-                     prefer_browser: bool = True) -> tuple[DesignVariant, bool]:
-    """One Option B preset variant."""
-    label, description = next((l, d) for a, l, d in VARIANTS if a == archetype)
-    return generate_styled(plan, archetype, label, f"{label}: {description}", context.palette.model_dump(), context.font_stack,
-                           template_html(plan, context, archetype), llm, prefer_browser)
+                     prefer_browser: bool = True, layouts: list[str] | None = None) -> tuple[DesignVariant, bool]:
+    """One Option B preset variant: the archetype's style in its own layout(s)."""
+    index = next(i for i, (a, _, _) in enumerate(VARIANTS) if a == archetype)
+    label, description = VARIANTS[index][1], VARIANTS[index][2]
+    layouts = layouts or variant_layouts(plan, index)
+    full = f"{label} · {LAYOUTS[layouts[0]][0]}"
+    style = f"{label}: {description} Layout: {LAYOUTS[layouts[0]][0]} — {LAYOUTS[layouts[0]][1]}"
+    return generate_paged(plan, archetype, full, layouts,
+                          lambda placed, arr, chip: template_html(placed, context, archetype, arrangement=arr, page_label=chip),
+                          style, context.palette.model_dump(), context.font_stack, llm, prefer_browser)
 
 
 def generate_variants(plan: DashboardPlan, context: BusinessContext, llm: LLMProvider | None, prefer_browser: bool = True) -> list[DesignVariant]:

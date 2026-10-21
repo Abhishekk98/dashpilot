@@ -19,7 +19,7 @@ from pydantic import BaseModel
 
 from core.context import BusinessContext
 from core.context_service import get_context
-from core.design_ai import DesignVariant, _hex_rgba, generate_styled, plan_signature, template_html
+from core.design_ai import DesignVariant, _hex_rgba, generate_paged, plan_signature, template_html
 from core.design_import import contrast
 from core.planner import DashboardPlan
 from core.projects import Project, ProjectStore
@@ -109,20 +109,25 @@ def _style_text(profile: StyleProfile, accent: str) -> str:
             f"{profile.spacing} spacing, text {profile.palette.text}, muted {profile.palette.muted}, accent {accent}.")
 
 
-def variant_template(plan: DashboardPlan, context: BusinessContext, profile: StyleProfile, variant: str) -> str:
-    return template_html(plan, context, theme=theme(profile, _accent(variant, profile, context)), fonts=FONTS[profile.font_character])
+def variant_template(plan: DashboardPlan, context: BusinessContext, profile: StyleProfile, variant: str,
+                     arrangement=None, chip: str = "") -> str:
+    return template_html(plan, context, theme=theme(profile, _accent(variant, profile, context)), fonts=FONTS[profile.font_character],
+                         arrangement=arrangement, page_label=chip)
 
 
 def generate_variants(plan: DashboardPlan, context: BusinessContext, profile: StyleProfile, llm: LLMProvider | None,
                       prefer_browser: bool = True) -> list[DesignVariant]:
     out = []
     ai = llm
+    layouts = ["grid"] * len(plan.pages)
     for vid, label, _ in VARIANTS:
         accent = _accent(vid, profile, context)
         palette = {"accent": accent, "background": profile.background.colors, "card": profile.card_color,
                    "text": profile.palette.text, "muted": profile.palette.muted}
-        variant, usable = generate_styled(plan, vid, label, _style_text(profile, accent), palette, profile.font_character,
-                                          variant_template(plan, context, profile, vid), ai, prefer_browser)
+        variant, usable = generate_paged(
+            plan, vid, label, layouts,
+            lambda placed, arr, chip, vid=vid: variant_template(placed, context, profile, vid, arr, chip),
+            _style_text(profile, accent), palette, profile.font_character, ai, prefer_browser)
         if ai is None and llm is not None:
             variant.note = "AI skipped after an earlier quota/key error; profile-themed template used."
         elif variant.note:

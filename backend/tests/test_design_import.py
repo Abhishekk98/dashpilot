@@ -10,6 +10,7 @@ from PIL import Image
 
 from app.main import app
 from core.design_ai import template_html
+from core.planner import DashboardPlan, page_plan
 from core.design_contract import playwright_available, render_page
 from core.design_import import (
     DetectedBox, MappingItem, background_png, build_theme, contrast, css_hex, extract, match, title_score,
@@ -79,7 +80,9 @@ def _red_pixels(png: bytes) -> int:
 
 @pytest.fixture(scope="module")
 def shop():
-    return _plan(_ctx({n: (SAMPLES / n).read_bytes() for n in ("orders.csv", "customers.xlsx", "products.csv")}))
+    """Page 1 of the sample plan (designs and imports work per page)."""
+    plan, measures, dims = _plan(_ctx({n: (SAMPLES / n).read_bytes() for n in ("orders.csv", "customers.xlsx", "products.csv")}))
+    return page_plan(plan, 1), measures, dims
 
 
 # --- extraction + matching -----------------------------------------------------------------------
@@ -244,12 +247,18 @@ def test_import_api_flow(api, sample_bytes):
     bad = api.put(f"/api/projects/{pid}/design/import/mapping", json={"mapping": [{"visual_id": a["visual_id"], "box_id": "box_99"}]})
     assert bad.status_code == 422
 
+    # Page 2 (Details) is its own import: only its visuals (plus the shared slicers), its own background.
+    p2 = api.get(f"/api/projects/{pid}/design/import?page=2").json()
+    assert p2["page"] == 2 and p2["pages"] == ["Overview", "Details"] and p2["design"]["valid"]
+    assert {v["role"] for v in p2["visuals"]} == {"slicer", "chart"}
+    assert api.get(f"/api/projects/{pid}/design/background.png?page=2").status_code == 200
+    assert api.get(f"/api/projects/{pid}/design/import?page=3").status_code == 422
+
 
 def test_upload_and_staleness(api, sample_bytes):
     pid = _designed(api, sample_bytes)
     plan = api.get(f"/api/projects/{pid}/plan").json()["plan"]
-    from core.planner import DashboardPlan  # noqa: PLC0415
-    page = stitch_page(DashboardPlan.model_validate(plan))
+    page = stitch_page(page_plan(DashboardPlan.model_validate(plan), 1))
     res = api.post(f"/api/projects/{pid}/design/import/upload", files={"file": ("stitch.html", page.encode(), "text/html")})
     assert res.status_code == 200, res.text
     d = res.json()["design"]
@@ -258,12 +267,12 @@ def test_upload_and_staleness(api, sample_bytes):
     assert api.post(f"/api/projects/{pid}/design/import/upload", files={"file": ("x.png", b"\x89PNG", "image/png")}).status_code == 422
 
     # The plan changes (a chart removed) -> the uploaded design is matched again on the next read.
-    visuals = [{k: v[k] for k in ("role", "type", "title", "measures", "dimension", "sort", "purpose", "question_id", "text")} for v in plan["visuals"]]
+    visuals = [{k: v[k] for k in ("role", "type", "title", "measures", "dimension", "sort", "purpose", "question_id", "text", "page")} for v in plan["visuals"]]
     visuals.pop(next(i for i, v in enumerate(visuals) if v["role"] == "chart"))
     api.put(f"/api/projects/{pid}/plan", json={"visuals": visuals})
     res = api.get(f"/api/projects/{pid}/design/import").json()
     assert res["design"]["source"] == "upload" and "matched again" in res["notes"][0]
-    assert len(res["design"]["mapping"]) == len(visuals)
+    assert len(res["design"]["mapping"]) == len([v for v in visuals if v["page"] == 1 or v["role"] == "slicer"])
 
     # Back to the Step 7 design.
     res = api.post(f"/api/projects/{pid}/design/import/selected").json()
@@ -272,8 +281,7 @@ def test_upload_and_staleness(api, sample_bytes):
 
 def test_ai_mapping_through_api(api, sample_bytes):
     pid = _designed(api, sample_bytes)
-    from core.planner import DashboardPlan  # noqa: PLC0415
-    plan = DashboardPlan.model_validate(api.get(f"/api/projects/{pid}/plan").json()["plan"])
+    plan = page_plan(DashboardPlan.model_validate(api.get(f"/api/projects/{pid}/plan").json()["plan"]), 1)
     kpi = next(v for v in plan.visuals if v.role == "kpi")
     page = stitch_page(plan, rename={kpi.id: "Headline Q"})
     box_id = next(b.id for b in extract(page).boxes if b.title == "Headline Q")
@@ -291,13 +299,15 @@ def test_import_on_random_datasets(batch):
         ctx = _ctx(dataset(seed), seed)
         if ctx is None or not any(m.status == "passed" for m in build_measures(ctx, StoredMeasures(), False)[1]):
             continue
-        plan, _, _ = _plan(ctx, with_insights=seed % 2 == 0)
-        assert plan.valid
-        # Alternate between contract HTML (id match) and a Stitch-like page (title match).
-        page = template_html(plan, CTX, "light_elegant") if seed % 2 else stitch_page(plan)
-        found = extract(page)
-        mapping, _ = match(plan, found.boxes)
-        assert validate_mapping(plan, mapping, found.boxes) == [], f"seed {seed}"
-        assert {m.method for m in mapping} == ({"id"} if seed % 2 else {"title"}), f"seed {seed}"
+        whole, _, _ = _plan(ctx, with_insights=seed % 2 == 0)
+        assert whole.valid
+        for n in range(1, len(whole.pages) + 1):
+            plan = page_plan(whole, n)
+            # Alternate between contract HTML (id match) and a Stitch-like page (title match).
+            page = template_html(plan, CTX, "light_elegant") if seed % 2 else stitch_page(plan)
+            found = extract(page)
+            mapping, _ = match(plan, found.boxes)
+            assert validate_mapping(plan, mapping, found.boxes) == [], f"seed {seed}"
+            assert {m.method for m in mapping} == ({"id"} if seed % 2 else {"title"}), f"seed {seed}"
         ran += 1
     assert ran

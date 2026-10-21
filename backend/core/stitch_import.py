@@ -4,7 +4,8 @@
 memory only (never extracted to disk) with limits on entries, sizes and compression ratio, and any
 absolute, parent-relative or symlink entry is rejected.
 
-`upload` stores the export under storage/{id}/design/stitch/ and runs the shared Design Import on it
+`upload` stores the export under storage/{id}/design/stitch/ (page n of a multi-page plan:
+design/stitch/p{n}/; one export per page) and runs the shared Design Import on it
 (core.design_import_service.run_import): title matching (exact, fuzzy, AI), clean background from
 Stitch's own render, theme from Stitch's colors, and the fidelity report against screen.png.
 Selecting it (planner_service.select_variant("stitch")) writes selected.html like the other methods.
@@ -125,38 +126,59 @@ class StitchUpload(BaseModel):
     label: str
 
 
-def _dir(store: ProjectStore, project: Project):
-    path = store.project_dir(project.id) / STITCH_DIR
+def _path(store: ProjectStore, project: Project, page: int = 1):
+    return store.project_dir(project.id) / STITCH_DIR / ("" if page == 1 else f"p{page}")
+
+
+def _dir(store: ProjectStore, project: Project, page: int = 1):
+    path = _path(store, project, page)
     path.mkdir(parents=True, exist_ok=True)
     return path
 
 
-def get_upload(store: ProjectStore, project: Project) -> StitchUpload | None:
-    meta = store.project_dir(project.id) / STITCH_DIR / "meta.json"
+def get_upload(store: ProjectStore, project: Project, page: int = 1) -> StitchUpload | None:
+    meta = _path(store, project, page) / "meta.json"
     return StitchUpload.model_validate_json(meta.read_text(encoding="utf-8")) if meta.exists() else None
 
 
-def stitch_html(store: ProjectStore, project: Project) -> str | None:
-    path = store.project_dir(project.id) / STITCH_DIR / "code.html"
+def stitch_html(store: ProjectStore, project: Project, page: int = 1) -> str | None:
+    path = _path(store, project, page) / "code.html"
     return path.read_text(encoding="utf-8") if path.exists() else None
 
 
-def upload(store: ProjectStore, project: Project, llm: LLMProvider | None, filename: str, data: bytes):
-    """Store a Stitch export and import it (mapping, background, theme, fidelity)."""
-    from core.design_import_service import ImportError_, run_import  # noqa: PLC0415
+def stitch_pages(store: ProjectStore, project: Project) -> list[str]:
+    """The uploaded exports in page order (stops at the first page without one)."""
+    out = []
+    while (html := stitch_html(store, project, len(out) + 1)) is not None:
+        out.append(html)
+    return out
+
+
+def upload(store: ProjectStore, project: Project, llm: LLMProvider | None, filename: str, data: bytes, page: int = 1):
+    """Store a Stitch export for one page and import it (mapping, background, theme, fidelity)."""
+    from core.design_import_service import ImportError_, _page, run_import  # noqa: PLC0415
+    from core.planner_service import DESIGN_FILE  # noqa: PLC0415
 
     try:
         export = read_export(filename, data)
     except StitchError as exc:
         raise ImportError_(str(exc)) from None
-    folder = _dir(store, project)
+    _page(store, project, page)  # rejects pages the plan does not have
+    if page > 1 and stitch_html(store, project, page - 1) is None:
+        raise ImportError_(f"Upload the Stitch export for page {page - 1} first.")
+    folder = _dir(store, project, page)
     (folder / "code.html").write_text(export.html, encoding="utf-8")
     shot = folder / "screen.png"
     if export.screen:
         shot.write_bytes(export.screen)
     else:
         shot.unlink(missing_ok=True)
+    first = get_upload(store, project) if page > 1 else None
+    label = first.label if first else f"Option A · Google Stitch ({export.name})"  # one design, several pages: one label
     meta = StitchUpload(filename=export.name, has_screen=export.screen is not None, files=export.files,
-                        uploaded_at=datetime.now(timezone.utc), label=f"Option A · Google Stitch ({export.name})")
+                        uploaded_at=datetime.now(timezone.utc), label=label)
     (folder / "meta.json").write_text(json.dumps(meta.model_dump(mode="json"), indent=2), encoding="utf-8")
-    return run_import(store, project, llm, "option_a", meta.label, export.html, screen=export.screen)
+    if page > 1 and store.read_json(project.id, DESIGN_FILE).get("selected_method") == "A":
+        # Option A is already selected: this page joins the selection right away.
+        (store.project_dir(project.id) / "design" / f"selected_p{page}.html").write_text(export.html, encoding="utf-8")
+    return run_import(store, project, llm, "option_a", label, export.html, screen=export.screen, page=page)
