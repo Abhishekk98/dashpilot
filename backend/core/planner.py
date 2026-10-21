@@ -26,6 +26,7 @@ PROMPTS = Path(__file__).resolve().parent.parent / "llm" / "prompts"
 
 CANVAS_W, CANVAS_H = 1280, 720
 MARGIN, GAP = 24, 16
+DATE_SLICER_W = 280
 
 VisualType = Literal[
     "card", "line", "area", "clustered_bar", "clustered_column", "stacked_bar", "stacked_column", "donut",
@@ -253,9 +254,12 @@ def layout(visuals: list[PlanVisual]) -> list[PlanVisual]:
     inner = CANVAS_W - 2 * MARGIN
 
     # Top bar: title on the left (drawn by the design), slicers right-aligned.
-    sw, sh = 176, 40
-    for i, v in enumerate(reversed(slicers)):
-        v.box = Box(x=CANVAS_W - MARGIN - (i + 1) * sw - i * GAP // 2, y=16, w=sw, h=sh)
+    # The Date Range pill is wider: Power BI's between slicer needs ~170px for its two dates.
+    sh, right = 40, CANVAS_W - MARGIN
+    for v in reversed(slicers):
+        sw = DATE_SLICER_W if v.title == "Date Range" else 200
+        v.box = Box(x=right - sw, y=16, w=sw, h=sh)
+        right -= sw + GAP // 2
 
     top = 72
     if kpis:

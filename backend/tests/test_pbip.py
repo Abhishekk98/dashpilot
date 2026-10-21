@@ -194,6 +194,96 @@ def test_validator_catches_broken_files(shop):
     assert checks["resources"].status == "fail" and "DashPilotBackground.png" in " ".join(checks["resources"].issues)
 
 
+def test_validator_requires_datafolder_paths(shop):
+    files = dict(build(shop))
+    root = folder_name(shop.project_name)
+    table = next(p for p in files if "/tables/" in p and b"DataFolder &" in files[p])
+    text = files[table].decode()
+    files[table] = text.replace("DataFolder & ", '"C:\\DashPilot\\Shop_Co\\Data\\" & ', 1).encode()
+    check = next(c for c in validate(files) if c.id == "data_paths")
+    assert check.status == "fail" and any("absolute path" in i for i in check.issues)
+    assert any("does not start with DataFolder" in i for i in check.issues)
+
+    files = dict(build(shop))
+    del files["Data/orders.csv"]
+    check = next(c for c in validate(files) if c.id == "data_paths")
+    assert check.status == "fail" and "orders.csv" in " ".join(check.issues)
+    good = next(c for c in validate(build(shop)) if c.id == "data_paths")
+    assert good.status == "pass" and good.count >= 2
+    assert root
+
+
+def test_slicers_show_friendly_titles(shop):
+    inputs = shop.__class__(**{**shop.__dict__, "mapping": [m.model_copy(update={"pbi_title": True}) for m in shop.mapping]})
+    for files, header in ((build(shop), False), (build(inputs), True)):
+        plan = {v.title: v for v in shop.plan.visuals if v.role == "slicer"}
+        slicers = [v for v in _visuals(files) if v["visual"]["visualType"] == "slicer"]
+        assert slicers and len(slicers) == len(plan)
+        for s in slicers:
+            proj = next(iter(s["visual"]["query"]["queryState"].values()))["projections"][0]
+            assert proj["displayName"] in plan  # "Payment Channel", not payment_channel
+            props = s["visual"]["objects"]["header"][0]["properties"]
+            assert props["show"]["expr"]["Literal"]["Value"] == ("true" if header else "false")
+            if header:
+                assert props["text"]["expr"]["Literal"]["Value"] == f"'{proj['displayName']}'"
+
+
+def test_open_dashboard_cmd_sets_datafolder_anywhere(shop, tmp_path):
+    import os  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+    import sys  # noqa: PLC0415
+
+    from core.pbip_open import OPEN_CMD_NAME  # noqa: PLC0415
+    files = build(shop)
+    root = folder_name(shop.project_name)
+    cmd = files[OPEN_CMD_NAME]
+    assert cmd.decode("ascii").count("\r\n") == cmd.count(b"\n")  # CRLF for cmd.exe
+    assert OPEN_CMD_NAME in files["README.md"].decode() and "Edit parameters → DataFolder" in files["README.md"].decode()
+    if sys.platform != "win32":
+        pytest.skip("Open Dashboard.cmd runs on Windows")
+    folder = tmp_path / "My Reports & Co ü डैश" / root  # spaces, &, unicode
+    for path, content in files.items():
+        (folder / path).parent.mkdir(parents=True, exist_ok=True)
+        (folder / path).write_bytes(content)
+    expressions = folder / f"{root}.SemanticModel" / "definition" / "expressions.tmdl"
+    env = {**os.environ, "DP_NO_LAUNCH": "1"}
+    for _ in range(2):  # idempotent
+        run = subprocess.run(f'cmd /c ""{folder / OPEN_CMD_NAME}""', env=env, capture_output=True, timeout=60)  # as Explorer runs it
+        assert run.returncode == 0, run.stdout + run.stderr
+        text = expressions.read_text(encoding="utf-8")
+        assert text.splitlines()[0].startswith(f'expression DataFolder = "{folder}\\Data\\" meta [IsParameterQuery=true')
+        assert not expressions.read_bytes().startswith(b"\xef\xbb\xbf")
+    assert text.count("expression DataFolder") == 1
+
+
+def test_save_copy_points_datafolder_at_target(shop, tmp_path):
+    from core.pbip_open import OpenError, TargetExists, clean_target, save_copy, set_data_folder  # noqa: PLC0415
+    files = build(shop)
+    root = folder_name(shop.project_name)
+    tree = tmp_path / "build" / root
+    for path, content in files.items():
+        (tree / path).parent.mkdir(parents=True, exist_ok=True)
+        (tree / path).write_bytes(content)
+    target = tmp_path / "Docs" / "DashPilot" / root
+    pbip = save_copy(tree, root, target, overwrite=False)
+    assert pbip.exists() and (target / "Data" / "orders.csv").exists()
+    text = (target / f"{root}.SemanticModel" / "definition" / "expressions.tmdl").read_text(encoding="utf-8")
+    assert f'DataFolder = "{target}\\Data\\"' in text
+    with pytest.raises(TargetExists):
+        save_copy(tree, root, target, overwrite=False)
+    (target / "notes.txt").write_text("mine")
+    save_copy(tree, root, target, overwrite=True)
+    assert (target / "notes.txt").exists()  # only DashPilot's own folders are replaced
+    other = tmp_path / "Other"
+    other.mkdir()
+    (other / "x.txt").write_text("x")
+    with pytest.raises(OpenError, match="other files"):
+        save_copy(tree, root, other, overwrite=True)
+    with pytest.raises(OpenError):
+        clean_target("relative\\path", root)
+    assert 'DataFolder = "D:\\a ""b""\\Data\\"' in set_data_folder('expression DataFolder = "C:\\x\\" meta [IsParameterQuery=true]', 'D:\\a "b"\\Data')
+
+
 def test_map_visuals_warn(shop):
     plan = shop.plan.model_copy(deep=True)
     chart = next(v for v in plan.visuals if v.type == "clustered_bar")
@@ -205,7 +295,7 @@ def test_map_visuals_warn(shop):
 
 # --- API --------------------------------------------------------------------------------------------
 
-def test_build_api_flow(api, sample_bytes):
+def test_build_api_flow(api, sample_bytes, monkeypatch, tmp_path):
     from tests.test_design_import import _browser, _designed  # noqa: PLC0415
     if not _browser():
         pytest.skip("needs Playwright with Edge/Chrome for the design import")
@@ -230,6 +320,21 @@ def test_build_api_flow(api, sample_bytes):
     assert z.status_code == 200
     names = zipfile.ZipFile(io.BytesIO(z.content)).namelist()
     assert f"{b['folder']}/{b['folder']}.pbip" in names and any(n.endswith("/visual.json") for n in names)
+    assert f"{b['folder']}/Open Dashboard.cmd" in names
+
+    # Save & Open in Power BI: local copy with DataFolder pointing at it, then the launcher.
+    from core import pbip_service  # noqa: PLC0415
+    launched = []
+    monkeypatch.setattr(pbip_service, "launch", launched.append)
+    assert api.get(f"/api/projects/{pid}/build").json()["open_folder"].endswith(f"DashPilot\\{b['folder']}")
+    target = tmp_path / "Saved Dash"
+    res = api.post(f"/api/projects/{pid}/build/open", json={"folder": str(target)})
+    assert res.status_code == 200, res.text
+    assert res.json()["launched"] and launched == [target / f"{b['folder']}.pbip"]
+    assert f'"{target}\\Data\\"' in (target / f"{b['folder']}.SemanticModel/definition/expressions.tmdl").read_text(encoding="utf-8")
+    assert api.post(f"/api/projects/{pid}/build/open", json={"folder": str(target)}).status_code == 409
+    assert api.post(f"/api/projects/{pid}/build/open", json={"folder": str(target), "overwrite": True}).status_code == 200
+    assert api.post(f"/api/projects/{pid}/build/open", json={"folder": "not\\absolute"}).status_code == 422
 
     # Editing the plan makes the build stale (the mapping follows on the next import).
     plan = api.get(f"/api/projects/{pid}/plan").json()["plan"]

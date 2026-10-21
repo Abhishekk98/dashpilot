@@ -41,7 +41,8 @@ backend/
   app/                     # FastAPI: main.py (app factory), config.py (settings), api/routes/
   core/                    # one module per spec module: upload, profiling, cleaning, context, modelling,
                            # dax, insights, planner, stitch_prompt, design_import, pbip_builder, pbip_validator
-                           # (+ pbip_service: Step 9 build/zip in storage/{id}/build/)
+                           # (+ pbip_service: Step 9 build/zip in storage/{id}/build/; pbip_open: Open Dashboard.cmd
+                           #   in the zip + Save & Open in Power BI, both point DataFolder at the real Data folder)
                            # + planner_service, design_ai (method B), design_contract (shared Playwright
                            #   render_page/measure + contract checks), design_import(_service) (Step 8:
                            #   boxes, mapping, background.png, theme.json in storage/{id}/design/);

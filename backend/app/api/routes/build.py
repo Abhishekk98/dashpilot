@@ -4,7 +4,8 @@ from pydantic import BaseModel, Field
 
 from app.api.deps import get_store
 from app.api.routes.projects import _load
-from core.pbip_service import BuildError, BuildStatus, build_project, get_status, zip_path
+from core.pbip_service import (BuildError, BuildStatus, OpenConflict, OpenResult, build_project, get_status, save_and_open,
+                               zip_path)
 from core.projects import ProjectStore
 from llm import LLMProvider, get_llm
 
@@ -33,6 +34,23 @@ def read_build(project_id: str, store: ProjectStore = Depends(get_store), llm: L
 def run_build(project_id: str, body: BuildBody, store: ProjectStore = Depends(get_store), llm: LLMProvider | None = Depends(get_llm)) -> BuildStatus:
     """Build the PBIP (semantic model + report + data), validate it and zip it."""
     return _run(build_project, store, project_id, llm, body.data_folder)
+
+
+class OpenBody(BaseModel):
+    folder: str | None = Field(default=None, max_length=200)
+    overwrite: bool = False
+
+
+@router.post("/{project_id}/build/open", response_model=OpenResult)
+def save_open(project_id: str, body: OpenBody, store: ProjectStore = Depends(get_store)) -> OpenResult:
+    """Save the last build to a local folder (DataFolder set to it) and open it in Power BI Desktop."""
+    project = _load(store, project_id)
+    try:
+        return save_and_open(store, project, body.folder, body.overwrite)
+    except OpenConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except BuildError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
 
 
 @router.get("/{project_id}/build/download")

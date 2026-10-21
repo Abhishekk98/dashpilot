@@ -634,6 +634,16 @@ export interface BuildStatus {
   build: BuildResult | null;
   /** The plan, mapping or design changed after the last build. */
   stale: boolean;
+  /** Default local folder for Save & Open in Power BI (Documents\DashPilot\<project>). */
+  open_folder: string;
+}
+
+export interface OpenResult {
+  folder: string;
+  pbip: string;
+  data_folder: string;
+  launched: boolean;
+  message: string;
 }
 
 export type StitchStyle = "dark_futuristic" | "light_elegant" | "glassmorphism" | "minimal_corporate" | "neon_tech";
@@ -652,13 +662,17 @@ export interface StitchState {
   notes: string[];
 }
 
-export class ApiError extends Error {}
+export class ApiError extends Error {
+  constructor(message: string, readonly status?: number) {
+    super(message);
+  }
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE_URL}${path}`, { cache: "no-store", ...init });
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    throw new ApiError(body?.detail ?? `Request failed (${res.status})`);
+    throw new ApiError(body?.detail ?? `Request failed (${res.status})`, res.status);
   }
   return res.json();
 }
@@ -948,6 +962,11 @@ export function getBuildStatus(id: string): Promise<BuildStatus> {
 /** Build, validate and zip the PBIP; `dataFolder` is where the user will unzip the Data folder. */
 export function buildProject(id: string, dataFolder: string): Promise<BuildStatus> {
   return postJson(`/api/projects/${id}/build`, { data_folder: dataFolder });
+}
+
+/** Save the last build to a local folder (DataFolder set to it) and open it in Power BI Desktop; 409 = folder holds an earlier copy. */
+export function saveAndOpen(id: string, folder: string, overwrite = false): Promise<OpenResult> {
+  return postJson(`/api/projects/${id}/build/open`, { folder, overwrite });
 }
 
 export function buildDownloadUrl(id: string): string {

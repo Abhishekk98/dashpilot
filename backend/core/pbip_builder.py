@@ -8,7 +8,8 @@ Writes a complete PBIP folder as {relative path: bytes}:
                        StaticResources/RegisteredResources/ (background PNG + theme JSON from Step 8)
   Data/                the uploaded files (the M partitions read them through the DataFolder parameter)
   Data/Cleaned/        the cleaned tables as CSV (what the M steps produce), for reference
-  README.md            how to open
+  README.md            how to open (and how to change DataFolder by hand)
+  Open Dashboard.cmd   sets DataFolder to the Data folder next to it, then opens the .pbip
 
 Visual JSON comes from templates/visuals/{type}.json (visualType, query roles, default formatting).
 Positions come from the Step 8 mapping; each visual sits in its card's content area so the card
@@ -29,6 +30,7 @@ from core.cleaning import PipelineResult
 from core.dax import Measure
 from core.design_import import DetectedBox, MappingItem
 from core.modelling import ModelPlan
+from core.pbip_open import OPEN_CMD, OPEN_CMD_NAME
 from core.planner import DashboardPlan, PlanVisual
 from core import tmdl
 
@@ -301,16 +303,24 @@ def visual_json(v: PlanVisual, item: MappingItem, box: DetectedBox | None, order
             spec.setdefault("categoryLabels", {})["show"] = show_title  # the card's own label doubles as its title
         show_title = False
     if v.role == "slicer":
-        spec.setdefault("header", {})["show"] = show_title
+        # The slicer header is its title; Power BI would show the raw column name (payment_channel).
+        spec.setdefault("header", {}).update({"show": show_title, **({"text": v.title, "fontColor": tokens["text"]} if show_title else {})})
         show_title = False
         if v.dimension == DATE_SLICER_FIELD:
+            # A real date range: two date inputs (from – to) on Dim_Date, no slider (it needs height the pill lacks).
             spec.setdefault("data", {})["mode"] = "Between"
+            spec["slider"] = {"show": False}
+            spec["date"] = {"fontColor": tokens["text"], "background": tokens["card"], "textSize": 8}
     if len(v.measures) > 1 and "legend" in spec:
         spec["legend"]["show"] = True
     visual: dict = {"visualType": tpl["visualType"]}
     # Aligned KPI cards show the compact display measure (see kpi_display_measures).
     query = _query(v.model_copy(update={"measures": [kpi_display_name(v.measures[0])]}) if aligned and v.measures else v, tpl)
     if query:
+        if v.role == "slicer":  # friendly field name wherever Power BI shows it (header, tooltips, filter pane)
+            for role in query["queryState"].values():
+                for p in role["projections"]:
+                    p["displayName"] = v.title
         visual["query"] = query
     obj = objects(spec)
     if v.type == "text_box":
@@ -400,24 +410,34 @@ def _report_files(inp: BuildInputs, root: str) -> dict[str, bytes]:
 README = """# {name} — Power BI Project (built by DashPilot)
 
 ## How to open
-1. Unzip this archive. The default data folder is `{data_folder}`;
-   unzip so that the `Data` folder ends up there, or change the parameter in step 3.
-2. Open **Power BI Desktop** (2024 or newer) and double-click `{folder}.pbip`.
-3. If your files are in another place: **Home → Transform data → Edit parameters → DataFolder**
-   and enter the full path of the `Data` folder (ending with `\\`), then **Close & Apply**.
-4. Click **Refresh** to load the data. The page uses the designed background and theme;
-   visuals are already placed and bound to the measures.
+1. Unzip this archive anywhere (any folder name is fine, spaces too).
+2. Double-click **`Open Dashboard.cmd`** in the `{folder}` folder. It points the model's `DataFolder`
+   parameter at the `Data` folder next to it and opens `{folder}.pbip` in **Power BI Desktop**
+   (2024 or newer). Run it again whenever you move the folder.
+3. If the visuals are empty, click **Refresh** (Home → Refresh) once to load the data.
+
+Windows may ask before running a downloaded file: choose **More info → Run anyway** (or right-click the
+zip → Properties → Unblock before unzipping).
+
+## Changing DataFolder by hand
+Every table reads its file as `DataFolder & "<file name>"`; the build set DataFolder to
+`{data_folder}`. To change it without the script:
+- In Power BI Desktop: **Home → Transform data → Edit parameters → DataFolder**, enter the full path of
+  the `Data` folder ending with `\\` (for example `D:\\Reports\\{folder}\\Data\\`), then **Close & Apply** and **Refresh**.
+- Or, with Power BI closed, edit the first line of
+  `{folder}.SemanticModel/definition/expressions.tmdl`: `expression DataFolder = "D:\\Reports\\{folder}\\Data\\" meta [...]`.
 
 ## What is inside
 - `{folder}.SemanticModel` — tables, relationships, date table and the `_Measures` table (TMDL);
-  every table has its Power Query (M) with the cleaning steps from DashPilot.
+  every table has its Power Query (M) with the cleaning steps from DashPilot, reading your original files,
+  so a refresh with updated files is cleaned the same way.
 - `{folder}.Report` — one 1280×720 page (PBIR format), background image and theme in
   `StaticResources/RegisteredResources`.
-- `Data` — your uploaded files (read by Power Query); `Data/Cleaned` — the cleaned tables as CSV.
+- `Data` — your uploaded files (read by Power Query); `Data/Cleaned` — the cleaned tables as CSV, for reference.
+- `Open Dashboard.cmd` — sets DataFolder and opens the dashboard.
 
 Measures: {measures} • Visuals: {visuals} • Tables: {tables}
 """
-
 
 def build(inp: BuildInputs) -> dict[str, bytes]:
     folder = folder_name(inp.project_name)
@@ -441,4 +461,5 @@ def build(inp: BuildInputs) -> dict[str, bytes]:
     files["README.md"] = README.format(name=inp.project_name, folder=folder, data_folder=inp.data_folder,
                                        measures=len(inp.measures), visuals=len(inp.plan.visuals), tables=included).encode("utf-8")
     files[".gitignore"] = b"**/.pbi/localSettings.json\n**/.pbi/cache.abf\n"
+    files[OPEN_CMD_NAME] = OPEN_CMD
     return files

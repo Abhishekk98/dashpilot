@@ -29,6 +29,7 @@ from core.design_contract import overlap
 SCHEMA_DIR = Path(__file__).resolve().parent.parent / "templates" / "pbir_schemas"
 SCHEMA_BASE = "https://developer.microsoft.com/json-schemas/"
 JSON_SUFFIXES = (".json", ".pbir", ".pbism", ".pbip", ".platform")
+DATE_RANGE_MIN_W = 170  # Power BI's between date slicer (no slider) shows both dates from this width on
 
 
 class Check(BaseModel):
@@ -319,8 +320,13 @@ def validate(files: dict[str, bytes], width: int = 1280, height: int = 720) -> l
                               "(Admin portal → Tenant settings → Azure Maps). Pick a bar chart in Step 7 if you cannot change it."]
     else:
         layout_issues_warn = []
+    for d in visuals.values():
+        mode = d.get("visual", {}).get("objects", {}).get("data", [{}])[0].get("properties", {}).get("mode", {})
+        if d.get("visual", {}).get("visualType") == "slicer" and "'Between'" in json.dumps(mode) and d["position"]["width"] < DATE_RANGE_MIN_W:
+            layout_issues_warn.append(f"The date range slicer {d['name']} is {d['position']['width']:.0f}px wide; its two dates need about "
+                                      f"{DATE_RANGE_MIN_W}px. Give the Date Range filter a wider box in the design.")
     checks.append(Check(id="layout", label="Report page & visual positions", count=len(visuals),
-                        status="fail" if layout_issues else "warn" if maps else "pass",
+                        status="fail" if layout_issues else "warn" if layout_issues_warn else "pass",
                         detail=f"{len(visuals)} visuals on a {width}×{height} page", issues=(layout_issues + layout_issues_warn)[:20]))
 
     # 6. Resources and cross-file references
@@ -346,4 +352,44 @@ def validate(files: dict[str, bytes], width: int = 1280, height: int = 720) -> l
     checks.append(Check(id="resources", label="Background image & theme JSON", count=theme_colors,
                         status="fail" if res_issues or not theme else "pass",
                         detail=f"1280×720 background • {theme_colors} theme colors", issues=res_issues[:20]))
+
+    # 7. Data paths: queries read only through DataFolder, so the project opens wherever it is unzipped
+    path_issues, reads = data_path_issues(tmdl, files)
+    checks.append(Check(id="data_paths", label="Data files read through the DataFolder parameter", count=reads,
+                        status="fail" if path_issues else "pass",
+                        detail=f"{reads} file reads relative to DataFolder", issues=path_issues[:20]))
     return checks
+
+
+_SOURCE_CALL = re.compile(r"\b(File\.Contents|Folder\.Files|Folder\.Contents)\s*\(")
+_DATA_FOLDER_ARG = re.compile(r'\s*DataFolder\s*&\s*"((?:[^"]|"")*)"\s*\)')
+_ABSOLUTE = re.compile(r'^(?:[A-Za-z]:[\\/]|\\\\|/)')
+
+
+def data_path_issues(tmdl: dict[str, str], files: dict[str, bytes]) -> tuple[list[str], int]:
+    """Every File.Contents/Folder.* in the tables reads `DataFolder & "<file in Data/>"`; no absolute path
+    appears anywhere outside the DataFolder parameter itself."""
+    issues: list[str] = []
+    reads = 0
+    expressions = next((t for p, t in tmdl.items() if p.endswith("/expressions.tmdl")), "")
+    if not re.search(r'^expression DataFolder = "', expressions, re.M):
+        issues.append("The model has no DataFolder parameter.")
+    for path, text in tmdl.items():
+        name = path.rsplit("/", 1)[-1]
+        if "/tables/" not in path:
+            continue
+        for literal in scan(text)[1]:
+            if _ABSOLUTE.match(literal):
+                issues.append(f"{name}: absolute path {literal[:60]!r} (use DataFolder instead).")
+        for call in _SOURCE_CALL.finditer(text):
+            arg = _DATA_FOLDER_ARG.match(text, call.end())
+            if not arg:
+                issues.append(f"{name}: {call.group(1)} reads a path that does not start with DataFolder.")
+                continue
+            reads += 1
+            rel = arg.group(1).replace('""', '"')
+            if _ABSOLUTE.match(rel) or ".." in re.split(r"[\\/]", rel):
+                issues.append(f"{name}: {rel!r} leaves the DataFolder.")
+            elif f"Data/{rel.replace(chr(92), '/')}" not in files:
+                issues.append(f"{name}: reads {rel!r}, which is not in the package's Data folder.")
+    return issues, reads

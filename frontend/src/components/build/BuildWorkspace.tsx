@@ -9,6 +9,7 @@ import { Icon } from "@/components/ui/Icon";
 import { PillButton } from "@/components/ui/PillButton";
 import { PlaceholderCard } from "@/components/ui/PlaceholderCard";
 import {
+  ApiError,
   type BuildCheck,
   buildDownloadUrl,
   buildProject,
@@ -16,7 +17,9 @@ import {
   designBackgroundUrl,
   getBuildStatus,
   getProject,
+  type OpenResult,
   type Project,
+  saveAndOpen,
 } from "@/lib/api";
 import { formatNumber } from "@/lib/format";
 
@@ -67,6 +70,10 @@ export function BuildWorkspace() {
   const [building, setBuilding] = useState(false);
   const [stage, setStage] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [openFolder, setOpenFolder] = useState("");
+  const [opening, setOpening] = useState(false);
+  const [opened, setOpened] = useState<OpenResult | null>(null);
+  const [openError, setOpenError] = useState<string | null>(null);
   const playbook = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -78,6 +85,7 @@ export function BuildWorkspace() {
         if (!alive) return;
         setStatus(s);
         setDataFolder(s.build?.data_folder ?? s.default_data_folder);
+        setOpenFolder(s.open_folder);
       })
       .catch((e) => alive && setError((e as Error).message || "Could not load the build. Is the backend running?"));
     return () => {
@@ -115,6 +123,23 @@ export function BuildWorkspace() {
       setError((e as Error).message);
     } finally {
       setBuilding(false);
+    }
+  };
+
+  const open = async (overwrite = false) => {
+    setOpening(true);
+    setOpenError(null);
+    setOpened(null);
+    try {
+      setOpened(await saveAndOpen(projectId, openFolder, overwrite));
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409 && !overwrite && window.confirm(`${e.message}\n\nThe dashboard there will be replaced by this build.`)) {
+        setOpening(false);
+        return open(true);
+      }
+      setOpenError((e as Error).message);
+    } finally {
+      setOpening(false);
     }
   };
 
@@ -211,7 +236,7 @@ export function BuildWorkspace() {
               className="w-full px-4 py-2.5 rounded-2xl bg-surface-container-low text-on-surface font-code-sm text-code-sm outline-none focus:ring-2 focus:ring-secondary-container"
             />
             <span className="font-body-md text-[11px] text-on-surface-variant">
-              Power Query reads your files from here (the <code>DataFolder</code> parameter). Unzip so the project&apos;s <code>Data</code> folder lands at this path, or change the parameter later in Power BI.
+              The <code>DataFolder</code> parameter&apos;s starting value. You rarely need to change it: <code>Open Dashboard.cmd</code> in the zip and <em>Save &amp; Open in Power BI</em> both point it at the real <code>Data</code> folder.
             </span>
           </label>
           <PillButton icon={building ? "sync" : "build"} disabled={building || !status?.ready || !dataFolder.trim()} onClick={run} className="self-start">
@@ -318,6 +343,38 @@ export function BuildWorkspace() {
             </div>
           )}
 
+          <div className="rounded-2xl bg-surface-container-low p-4 flex flex-col gap-3">
+            <div className="flex items-center gap-2 font-label-md text-label-md text-on-surface font-semibold">
+              <Icon name="open_in_new" className="text-[18px]" /> Save &amp; Open in Power BI
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2.5">
+              <input
+                aria-label="Folder to save the project in"
+                value={openFolder}
+                onChange={(e) => setOpenFolder(e.target.value)}
+                spellCheck={false}
+                className="flex-1 min-w-0 px-4 py-2.5 rounded-2xl bg-surface-container-lowest text-on-surface font-code-sm text-code-sm outline-none focus:ring-2 focus:ring-secondary-container"
+              />
+              <PillButton icon={opening ? "sync" : "rocket_launch"} disabled={!ok || opening || !openFolder.trim()} onClick={() => open()} className="shrink-0">
+                {opening ? "Opening…" : "Save & Open"}
+              </PillButton>
+            </div>
+            <span className="font-body-md text-[11px] text-on-surface-variant">
+              Saves the project on this PC with its data folder set to <code>{openFolder ? `${openFolder.replace(/[\\/]+$/, "")}\\Data\\` : "…\\Data\\"}</code> and opens it in Power BI Desktop.
+            </span>
+            {opened && (
+              <p role="status" className="flex items-start gap-2 font-body-md text-body-md text-on-surface">
+                <Icon name={opened.launched ? "check_circle" : "info"} className="text-[18px] text-secondary shrink-0 mt-0.5" />
+                <span>{opened.message} <code className="font-code-sm text-code-sm text-on-surface-variant break-all">{opened.pbip}</code></span>
+              </p>
+            )}
+            {openError && (
+              <p role="alert" className="flex items-start gap-2 font-body-md text-body-md text-on-error-container">
+                <Icon name="error" className="text-[18px] shrink-0 mt-0.5" /> {openError}
+              </p>
+            )}
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <span title="Documentation PDF comes in a later version" className="rounded-2xl bg-surface-container-low px-4 py-3 flex items-center justify-center gap-2 font-label-md text-label-md text-on-surface-variant/60 cursor-not-allowed">
               <Icon name="picture_as_pdf" className="text-[16px]" /> Model PDF Guide · soon
@@ -341,8 +398,8 @@ export function BuildWorkspace() {
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {[
-            { n: "01", icon: "unarchive", t: "Unzip Downloaded Archive", d: `Extract it so the Data folder ends up at ${dataFolder || "your data folder"} (or change the DataFolder parameter in Power BI).` },
-            { n: "02", icon: "mouse", t: "Double-click the .pbip File", d: `Open ${status?.project_folder ?? "Project"}.pbip in Power BI Desktop. The page, background and theme load right away.` },
+            { n: "01", icon: "unarchive", t: "Unzip Anywhere", d: "Extract the zip to any folder (spaces are fine), or skip steps 1–2 with Save & Open in Power BI above." },
+            { n: "02", icon: "mouse", t: "Run Open Dashboard.cmd", d: `It points the DataFolder parameter at the Data folder next to it and opens ${status?.project_folder ?? "Project"}.pbip in Power BI Desktop.` },
             { n: "03", icon: "refresh", t: "Refresh, Edit & Publish", d: "Click Refresh to load the data. Visuals, slicers, relationships and DAX measures arrive bound and editable." },
           ].map((s) => (
             <div key={s.n} className="rounded-2xl bg-surface-container-low p-5 flex flex-col gap-2">

@@ -20,6 +20,7 @@ from core.design_ai import plan_signature
 from core.design_import_service import ImportError_, _plan, get_import
 from core.modelling_service import build_with_results
 from core.pbip_builder import BuildInputs, build, folder_name
+from core.pbip_open import OpenError, TargetExists, clean_target, default_target, launch, save_copy
 from core.pbip_validator import Check, validate
 from core.projects import Project, ProjectStore
 from llm import LLMProvider
@@ -56,6 +57,7 @@ class BuildStatus(BaseModel):
     project_folder: str
     build: BuildResult | None = None
     stale: bool = False  # plan, mapping or design changed after this build
+    open_folder: str = ""  # default local folder for Save & Open in Power BI
 
 
 def _signature(store: ProjectStore, project: Project, llm: LLMProvider | None) -> tuple[str, object]:
@@ -102,7 +104,8 @@ def get_status(store: ProjectStore, project: Project, llm: LLMProvider | None) -
     stored = store.read_json(project.id, BUILD_FILE)
     last = BuildResult.model_validate(stored) if stored else None
     return BuildStatus(ready=not blockers, blockers=blockers, default_data_folder=default_data_folder(project),
-                       project_folder=folder_name(project.name), build=last, stale=bool(last and sig and last.signature != sig))
+                       project_folder=folder_name(project.name), build=last, stale=bool(last and sig and last.signature != sig),
+                       open_folder=default_target(folder_name(project.name)))
 
 
 def build_project(store: ProjectStore, project: Project, llm: LLMProvider | None, data_folder: str | None) -> BuildStatus:
@@ -157,17 +160,56 @@ def build_project(store: ProjectStore, project: Project, llm: LLMProvider | None
         signature=sig,
     )
     store.write_json(project.id, BUILD_FILE, result.model_dump(mode="json"))
-    return BuildStatus(ready=True, default_data_folder=default_data_folder(project), project_folder=folder, build=result)
+    return BuildStatus(ready=True, default_data_folder=default_data_folder(project), project_folder=folder, build=result,
+                       open_folder=default_target(folder))
 
 
-def zip_path(store: ProjectStore, project: Project):
+def _last_build(store: ProjectStore, project: Project) -> BuildResult:
     stored = store.read_json(project.id, BUILD_FILE)
     if not stored:
         raise BuildError("Build the project first.")
     result = BuildResult.model_validate(stored)
     if not result.valid:
         raise BuildError("The last build did not pass validation; fix the issues and build again.")
+    return result
+
+
+def zip_path(store: ProjectStore, project: Project):
+    result = _last_build(store, project)
     path = store.project_dir(project.id) / "build" / result.zip_name
     if not path.exists():
         raise BuildError("Build the project first.")
     return path, result.zip_name
+
+
+class OpenResult(BaseModel):
+    folder: str
+    pbip: str
+    data_folder: str
+    launched: bool
+    message: str
+
+
+class OpenConflict(BuildError):
+    """The target already holds a saved copy (the UI asks before replacing it)."""
+
+
+def save_and_open(store: ProjectStore, project: Project, target: str | None, overwrite: bool = False) -> OpenResult:
+    """Copy the last build to a local folder with DataFolder pointing there, then open it in Power BI Desktop."""
+    result = _last_build(store, project)
+    tree = store.project_dir(project.id) / "build" / result.folder
+    if not tree.is_dir():
+        raise BuildError("Build the project first.")
+    try:
+        path = clean_target(target, result.folder)
+        pbip = save_copy(tree, result.folder, path, overwrite)
+    except TargetExists as exc:
+        raise OpenConflict(str(exc)) from None
+    except OpenError as exc:
+        raise BuildError(str(exc)) from None
+    try:
+        launch(pbip)
+        launched, message = True, "Opening in Power BI Desktop. Click Refresh if the visuals are empty."
+    except OSError:
+        launched, message = False, f"Saved. Open {pbip.name} in Power BI Desktop (it could not be started from here)."
+    return OpenResult(folder=str(path), pbip=str(pbip), data_folder=str(path / "Data") + "\\", launched=launched, message=message)
