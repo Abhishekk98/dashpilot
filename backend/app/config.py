@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     max_upload_mb: int = 100
 
     # Stored as a comma-separated string so it can be set from a plain env var.
-    cors_origins: str = "http://localhost:3000,http://localhost:3001"
+    cors_origins: str = "http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001"
 
     @property
     def cors_origin_list(self) -> list[str]:
