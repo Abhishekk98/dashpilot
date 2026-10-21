@@ -601,6 +601,8 @@ export interface ImportResponse {
   /** The imported HTML (for the "Original design" view). */
   html: string;
   notes: string[];
+  page?: number;
+  pages?: string[];
 }
 
 export type MappingEdit = Pick<MappingItem, "visual_id" | "box_id" | "x" | "y" | "w" | "h">;
@@ -629,6 +631,7 @@ export interface BuildResult {
   visuals: number;
   bindings: number;
   partitions: number;
+  pages?: number;
 }
 
 export interface BuildStatus {
@@ -902,39 +905,39 @@ export function referenceImageUrl(id: string, version: string): string {
 }
 
 /** The saved design import, or a fresh import of the design selected in Step 7. */
-export function getDesignImport(id: string): Promise<ImportResponse> {
-  return request(`/api/projects/${id}/design/import`);
+export function getDesignImport(id: string, page: number = 1): Promise<ImportResponse> {
+  return request(`/api/projects/${id}/design/import?page=${page}`);
 }
 
-export function importSelectedDesign(id: string): Promise<ImportResponse> {
-  return postJson(`/api/projects/${id}/design/import/selected`);
+export function importSelectedDesign(id: string, page: number = 1): Promise<ImportResponse> {
+  return postJson(`/api/projects/${id}/design/import/selected?page=${page}`);
 }
 
-export function uploadDesignHtml(id: string, file: File): Promise<ImportResponse> {
+export function uploadDesignHtml(id: string, file: File, page: number = 1): Promise<ImportResponse> {
   const form = new FormData();
   form.append("file", file);
-  return request(`/api/projects/${id}/design/import/upload`, { method: "POST", body: form });
+  return request(`/api/projects/${id}/design/import/upload?page=${page}`, { method: "POST", body: form });
 }
 
-export function saveDesignMapping(id: string, mapping: MappingEdit[]): Promise<ImportResponse> {
-  return request(`/api/projects/${id}/design/import/mapping`, {
+export function saveDesignMapping(id: string, mapping: MappingEdit[], page: number = 1): Promise<ImportResponse> {
+  return request(`/api/projects/${id}/design/import/mapping?page=${page}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ mapping }),
   });
 }
 
-export function designBackgroundUrl(id: string, version: string): string {
-  return `${API_BASE_URL}/api/projects/${id}/design/background.png?v=${encodeURIComponent(version)}`;
+export function designBackgroundUrl(id: string, version: string, page: number = 1): string {
+  return `${API_BASE_URL}/api/projects/${id}/design/background.png?v=${encodeURIComponent(version)}&page=${page}`;
 }
 
 /** The design rendered as-is (before dummy contents are hidden). */
-export function designOriginalUrl(id: string, version: string): string {
-  return `${API_BASE_URL}/api/projects/${id}/design/original.png?v=${encodeURIComponent(version)}`;
+export function designOriginalUrl(id: string, version: string, page: number = 1): string {
+  return `${API_BASE_URL}/api/projects/${id}/design/original.png?v=${encodeURIComponent(version)}&page=${page}`;
 }
 
-export function setFidelityOverride(id: string, override: boolean): Promise<ImportResponse> {
-  return request(`/api/projects/${id}/design/import/fidelity-override`, {
+export function setFidelityOverride(id: string, override: boolean, page: number = 1): Promise<ImportResponse> {
+  return request(`/api/projects/${id}/design/import/fidelity-override?page=${page}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ override }),

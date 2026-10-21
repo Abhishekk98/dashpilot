@@ -63,6 +63,7 @@ export function ImportWorkspace() {
   const projectId = useSearchParams().get("project");
 
   const [project, setProject] = useState<Project | null>(null);
+  const [activePage, setActivePage] = useState<number>(1);
   const [data, setData] = useState<ImportResponse | null>(null);
   const [mapping, setMapping] = useState<MappingEdit[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -83,14 +84,24 @@ export function ImportWorkspace() {
     if (!projectId) return;
     let alive = true;
     getProject(projectId).then((p) => alive && setProject(p)).catch(() => undefined);
-    getDesignImport(projectId)
+    getDesignImport(projectId, activePage)
       .then((res) => alive && load(res))
       .catch((e) => alive && setError((e as Error).message || "Could not import the design. Is the backend running?"))
       .finally(() => alive && setBusy(null));
     return () => {
       alive = false;
     };
-  }, [projectId, load]);
+  }, [projectId, activePage, load]);
+
+  const switchPage = (newPage: number) => {
+    if (newPage === activePage) return;
+    if (dirty) {
+      if (!confirm("You have unsaved mapping changes on this page. Discard them and switch page?")) return;
+    }
+    setSelected(null);
+    setActivePage(newPage);
+    setBusy("load");
+  };
 
   const dirty = useMemo(() => !!data && JSON.stringify(mapping) !== JSON.stringify(toEdits(data)), [data, mapping]);
   const problems = useMemo(() => {
@@ -201,6 +212,30 @@ export function ImportWorkspace() {
         )}
       </header>
 
+      {data?.pages && data.pages.length > 1 && (
+        <div className="flex items-center gap-2 border-b border-surface-container-high pb-4 mb-6">
+          {data.pages.map((pName, idx) => {
+            const pageNum = idx + 1;
+            const isActive = activePage === pageNum;
+            return (
+              <button
+                key={pageNum}
+                type="button"
+                onClick={() => switchPage(pageNum)}
+                className={`px-4 py-2 rounded-full font-label-md text-label-md flex items-center gap-2 transition-all ${
+                  isActive
+                    ? "bg-primary-container text-on-primary font-semibold shadow-sm"
+                    : "bg-surface-container text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high"
+                }`}
+              >
+                <span className={`w-2 h-2 rounded-full ${isActive ? "bg-secondary-container" : "bg-outline/50"}`} />
+                Page {pageNum}: {pName}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {error && (
         <div role="alert" className="mb-6 p-4 rounded-inner bg-error-container/60 text-on-error-container flex items-start gap-3">
           <Icon name="error" className="text-[20px] mt-0.5" />
@@ -232,7 +267,7 @@ export function ImportWorkspace() {
         onChange={(e) => {
           const f = e.target.files?.[0];
           e.target.value = "";
-          if (f) void run("upload", () => uploadDesignHtml(projectId, f));
+          if (f) void run("upload", () => uploadDesignHtml(projectId, f, activePage));
         }}
       />
 
@@ -259,7 +294,7 @@ export function ImportWorkspace() {
               <button
                 type="button"
                 disabled={busy !== null}
-                onClick={() => run("selected", () => importSelectedDesign(projectId))}
+                onClick={() => run("selected", () => importSelectedDesign(projectId, activePage))}
                 title="Import the design selected in Step 7 again (drops manual edits)"
                 className="flex items-center gap-1.5 font-label-md text-label-md text-on-surface-variant hover:text-on-surface px-3 py-1.5 rounded-full bg-surface-container-lowest/80 disabled:opacity-50"
               >
@@ -287,8 +322,8 @@ export function ImportWorkspace() {
               <div className={busy && busy !== "load" ? "opacity-60 pointer-events-none" : ""}>
                 <MappingCanvas
                   view={view}
-                  backgroundUrl={designBackgroundUrl(projectId, d.background_version)}
-                  originalUrl={d.fidelity ? designOriginalUrl(projectId, d.background_version) : null}
+                  backgroundUrl={designBackgroundUrl(projectId, d.background_version, activePage)}
+                  originalUrl={d.fidelity ? designOriginalUrl(projectId, d.background_version, activePage) : null}
                   html={data.html}
                   visuals={data.visuals}
                   mapping={mapping}
@@ -367,7 +402,7 @@ export function ImportWorkspace() {
                 report={d.fidelity}
                 override={d.fidelity_override}
                 busy={busy !== null}
-                onOverride={(v) => run("save", () => setFidelityOverride(projectId, v))}
+                onOverride={(v) => run("save", () => setFidelityOverride(projectId, v, activePage))}
               />
             )}
 
@@ -397,7 +432,7 @@ export function ImportWorkspace() {
             </div>
             {dirty && (
               <div className="flex items-center gap-3">
-                <PillButton icon={busy === "save" ? "sync" : "save"} disabled={busy !== null} onClick={() => run("save", () => saveDesignMapping(projectId, mapping))}>
+                <PillButton icon={busy === "save" ? "sync" : "save"} disabled={busy !== null} onClick={() => run("save", () => saveDesignMapping(projectId, mapping, activePage))}>
                   Save mapping
                 </PillButton>
                 <button type="button" onClick={() => data && setMapping(toEdits(data))} className="font-label-md text-label-md text-on-surface-variant hover:text-on-surface underline underline-offset-4">
@@ -415,7 +450,7 @@ export function ImportWorkspace() {
             <span className={`w-2.5 h-2.5 rounded-full ${complete ? "bg-secondary-container" : "bg-error"} animate-pulse`} />
             <span className="font-label-md text-label-md text-on-surface">
               <strong className="font-semibold">Step 8 of 9: Design Import &amp; Slot Binding</strong>
-              {d ? ` • ${placedCount}/${total} visuals bound • ${complete ? "mapping complete" : dirty ? "unsaved changes" : "mapping incomplete"}` : " • Importing…"}
+              {d ? ` • ${data?.pages && data.pages.length > 1 ? `Page ${activePage}/${data.pages.length} (${data.pages[activePage - 1] ?? "Page"}) • ` : ""}${placedCount}/${total} visuals bound • ${complete ? "mapping complete" : dirty ? "unsaved changes" : "mapping incomplete"}` : " • Importing…"}
             </span>
           </div>
           <div className="flex flex-wrap items-center gap-3 justify-end">
@@ -428,7 +463,7 @@ export function ImportWorkspace() {
             <button
               type="button"
               disabled={!dirty || busy !== null}
-              onClick={() => run("save", () => saveDesignMapping(projectId, mapping))}
+              onClick={() => run("save", () => saveDesignMapping(projectId, mapping, activePage))}
               className="px-4 py-2 rounded-full bg-surface-container-low text-on-surface-variant hover:text-on-surface hover:bg-surface-container font-label-md text-label-md flex items-center gap-1.5 disabled:opacity-50"
             >
               <Icon name="save" className="text-[16px]" /> Save Draft

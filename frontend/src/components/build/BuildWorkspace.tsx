@@ -273,7 +273,7 @@ export function BuildWorkspace() {
                 <span>dashpilot</span>
               </span>
               <span className="whitespace-nowrap">[{time(0)}] INFO: Wrote {b.tables} TMDL tables, {b.partitions} Power Query partitions</span>
-              <span className="whitespace-nowrap">[{time(0)}] SUCCESS: Bound {b.bindings} fields across {b.visuals} visuals</span>
+              <span className="whitespace-nowrap">[{time(0)}] SUCCESS: Bound {b.bindings} fields across {b.visuals} visuals on {b.pages ?? 1} page{(b?.pages ?? 1) > 1 ? "s" : ""}</span>
               <span className="whitespace-nowrap">[{time(1)}] {fails ? "ERROR" : "CHECK"}: {passed}/{b.checks.length} validations passed{warns ? `, ${warns} warning${warns > 1 ? "s" : ""}` : ""}</span>
               <span className="whitespace-nowrap">[{time(1)}] {b.valid ? "READY" : "BLOCKED"}: {b.zip_name} ({size(b.size_bytes)})</span>
             </div>
@@ -302,7 +302,9 @@ export function BuildWorkspace() {
               <span className="px-3 py-1 rounded-full bg-primary-container text-on-primary font-code-sm text-code-sm flex items-center gap-1.5">
                 <Icon name="folder" className="text-[14px] text-secondary-container" /> {status?.project_folder ?? "Project"}.pbip
               </span>
-              <span className="font-code-sm text-code-sm text-on-surface-variant">16:9 Native Layout • 1280×720</span>
+              <span className="font-code-sm text-code-sm text-on-surface-variant">
+                16:9 Native Layout • 1280×720 • {b?.pages ? `${b.pages} ${b.pages > 1 ? "Pages" : "Page"}` : "1 Page"}
+              </span>
             </div>
             <div className="relative w-full aspect-video rounded-xl overflow-hidden bg-surface-container shadow-inner">
               {/* eslint-disable-next-line @next/next/no-img-element -- generated per project */}
@@ -311,9 +313,10 @@ export function BuildWorkspace() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
             {[
               { v: b ? String(fails) : "–", l: fails ? "Errors" : "Errors (all validated)" },
+              { v: b ? formatNumber(b.pages ?? 1) : "–", l: (b?.pages ?? 1) > 1 ? "Pages" : "Page" },
               { v: b ? formatNumber(b.measures) : "–", l: "DAX measures" },
               { v: b ? formatNumber(b.visuals) : "–", l: "Visual containers" },
               { v: b ? formatNumber(b.bindings) : "–", l: "Field bindings" },

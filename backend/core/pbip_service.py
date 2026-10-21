@@ -48,6 +48,7 @@ class BuildResult(BaseModel):
     visuals: int
     bindings: int
     partitions: int
+    pages: int = 1
     signature: str  # plan + mapping + design version the build was made from
 
 
@@ -166,6 +167,7 @@ def build_project(store: ProjectStore, project: Project, llm: LLMProvider | None
         tables=count(r"\.SemanticModel/definition/tables/"), measures=len(inputs.measures),
         visuals=count(r"/visuals/.+/visual\.json$"), bindings=next((c.count or 0 for c in checks if c.id == "fields"), 0),
         partitions=sum(content.count(b"\tpartition ") for p, content in files.items() if p.endswith(".tmdl")),
+        pages=len(pages),
         signature=sig,
     )
     store.write_json(project.id, BUILD_FILE, result.model_dump(mode="json"))

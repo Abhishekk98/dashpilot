@@ -39,6 +39,17 @@ const METHODS: { key: Method; icon: string; title: string; text: string; availab
 
 const LIMITS = { kpi: 5, chart: 6, slicer: 3 } as const;
 
+const LAYOUT_NAMES: Record<string, string> = {
+  bento: "Bento Grid",
+  hero_trend: "Hero KPI + Trend",
+  side_panel: "Side Panel",
+  executive_split: "Executive Split",
+  command_center: "Command Center",
+  editorial: "Editorial",
+  detail_focus: "Detail Focus",
+  grid: "Classic Grid",
+};
+
 function toDrafts(plan: DashboardPlan): Draft[] {
   return plan.visuals.map((v) => ({
     key: v.id,
@@ -71,6 +82,8 @@ export function DesignWorkspace() {
   const [notes, setNotes] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<DesignVariant | null>(null);
+  const [previewPage, setPreviewPage] = useState<number>(1);
+  const [cardPages, setCardPages] = useState<Record<string, number>>({});
   const [method, setMethod] = useState<Method>("B");
 
   const load = useCallback((res: PlanResponse) => {
@@ -406,16 +419,65 @@ export function DesignWorkspace() {
               <div className={`grid grid-cols-1 lg:grid-cols-3 gap-5 ${design.stale ? "opacity-60" : ""}`}>
                 {design.variants.map((v) => {
                   const isChosen = design.selected === v.id;
+                  const activeCardPage = cardPages[v.id] ?? 1;
+                  const activeHtml = v.pages?.[activeCardPage - 1] ?? v.html;
+                  const activeLayout = v.layouts?.[activeCardPage - 1] || v.layouts?.[0];
+                  const layoutLabel = activeLayout ? (LAYOUT_NAMES[activeLayout] || activeLayout) : null;
                   return (
                     <div key={v.id} className={`p-3 rounded-card bg-surface-container-lowest/90 shadow-card flex flex-col gap-3 ${isChosen ? "ring-2 ring-primary-container" : ""}`}>
-                      <button type="button" onClick={() => setPreview(v)} className="block rounded-inner overflow-hidden" aria-label={`Open ${v.label} full size`}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPreview(v);
+                          setPreviewPage(cardPages[v.id] ?? 1);
+                        }}
+                        className="block rounded-inner overflow-hidden"
+                        aria-label={`Open ${v.label} full size`}
+                      >
                         <ScaledCanvas>
-                          <DesignFrame html={v.html} title={v.label} />
+                          <DesignFrame html={activeHtml} title={v.label} />
                         </ScaledCanvas>
                       </button>
+
+                      {v.pages && v.pages.length > 1 && (
+                        <div className="flex items-center gap-1.5 px-1">
+                          {v.pages.map((_, pIdx) => {
+                            const pNum = pIdx + 1;
+                            const isPActive = activeCardPage === pNum;
+                            const pLabel = plan?.pages?.[pIdx] ?? `Page ${pNum}`;
+                            const pLayout = v.layouts?.[pIdx];
+                            return (
+                              <button
+                                key={pNum}
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setCardPages((cur) => ({ ...cur, [v.id]: pNum }));
+                                }}
+                                title={pLayout ? `Layout: ${LAYOUT_NAMES[pLayout] || pLayout}` : undefined}
+                                className={`flex-1 px-2.5 py-1 rounded-full font-code-sm text-[11px] transition-colors flex items-center justify-center gap-1 ${
+                                  isPActive
+                                    ? "bg-primary-container text-on-primary font-semibold shadow-xs"
+                                    : "bg-surface-container-high/60 text-on-surface-variant hover:text-on-surface"
+                                }`}
+                              >
+                                <span>P{pNum}: {pLabel}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+
                       <div className="flex items-center justify-between gap-2 px-1">
                         <div className="flex flex-col min-w-0">
-                          <span className="font-title-lg text-[15px] text-on-surface font-semibold">{v.label}</span>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-title-lg text-[15px] text-on-surface font-semibold">{v.label}</span>
+                            {layoutLabel && (
+                              <span className="px-2 py-0.5 rounded-full bg-surface-container-high font-code-sm text-[10px] text-on-surface-variant font-medium">
+                                {layoutLabel}
+                              </span>
+                            )}
+                          </div>
                           <span className="font-body-md text-[11px] text-on-surface-variant truncate" title={v.note ?? undefined}>
                             {v.note ?? (v.source === "ai" ? `AI design, passed the contract${v.attempts > 1 ? ` on try ${v.attempts}` : ""}` : "Built-in template")}
                           </span>
@@ -431,7 +493,14 @@ export function DesignWorkspace() {
                         >
                           {isChosen ? "Selected" : "Use this design"}
                         </PillButton>
-                        <button type="button" onClick={() => setPreview(v)} className="ml-auto font-label-sm text-label-sm text-on-surface-variant hover:text-on-surface flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPreview(v);
+                            setPreviewPage(cardPages[v.id] ?? 1);
+                          }}
+                          className="ml-auto font-label-sm text-label-sm text-on-surface-variant hover:text-on-surface flex items-center gap-1"
+                        >
                           <Icon name="open_in_full" className="text-[14px]" /> Full size
                         </button>
                       </div>
@@ -449,14 +518,39 @@ export function DesignWorkspace() {
       {preview && (
         <div role="dialog" aria-modal="true" aria-label={`${preview.label} preview`} className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-6" onClick={() => setPreview(null)}>
           <div className="w-full max-w-[1280px] flex flex-col gap-3" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between text-white">
-              <span className="font-title-lg text-title-lg font-semibold">{preview.label} · 1280×720</span>
+            <div className="flex items-center justify-between text-white flex-wrap gap-2">
+              <div className="flex items-center gap-3">
+                <span className="font-title-lg text-title-lg font-semibold">{preview.label} · 1280×720</span>
+                {preview.pages && preview.pages.length > 1 && (
+                  <div className="flex items-center gap-1.5 p-1 rounded-full bg-white/10">
+                    {preview.pages.map((_, pIdx) => {
+                      const pNum = pIdx + 1;
+                      const isPActive = previewPage === pNum;
+                      const pLabel = plan?.pages?.[pIdx] ?? `Page ${pNum}`;
+                      const pLayout = preview.layouts?.[pIdx];
+                      return (
+                        <button
+                          key={pNum}
+                          type="button"
+                          onClick={() => setPreviewPage(pNum)}
+                          className={`px-3 py-1 rounded-full font-label-sm text-label-sm transition-colors flex items-center gap-1.5 ${
+                            isPActive ? "bg-white text-black font-semibold shadow-xs" : "text-white/70 hover:text-white"
+                          }`}
+                        >
+                          <span>Page {pNum}: {pLabel}</span>
+                          {pLayout && <span className="opacity-70 text-[10px]">({LAYOUT_NAMES[pLayout] || pLayout})</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
               <button type="button" aria-label="Close" onClick={() => setPreview(null)} className="w-9 h-9 rounded-full bg-white/15 flex items-center justify-center">
                 <Icon name="close" className="text-[20px]" />
               </button>
             </div>
             <ScaledCanvas className="rounded-inner">
-              <DesignFrame html={preview.html} title={preview.label} />
+              <DesignFrame html={preview.pages?.[previewPage - 1] ?? preview.html} title={`${preview.label} - Page ${previewPage}`} />
             </ScaledCanvas>
           </div>
         </div>
