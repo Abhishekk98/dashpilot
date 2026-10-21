@@ -409,11 +409,13 @@ export interface VisualInput {
   purpose: string;
   question_id: string | null;
   text: string[];
+  page?: number;
 }
 
 export interface PlanVisual extends VisualInput {
   id: string;
   box: { x: number; y: number; w: number; h: number };
+  page: number;
 }
 
 export interface DimensionOption {
@@ -428,6 +430,7 @@ export interface DashboardPlan {
   subtitle: string;
   width: number;
   height: number;
+  pages: string[];
   visuals: PlanVisual[];
   source: "rules" | "ai";
   edited: boolean;
@@ -451,6 +454,8 @@ export interface DesignVariant {
   valid: boolean;
   engine: string;
   note: string | null;
+  pages?: string[];
+  layouts?: string[];
 }
 
 export interface DesignState {

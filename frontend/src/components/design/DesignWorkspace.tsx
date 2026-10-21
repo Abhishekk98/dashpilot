@@ -51,6 +51,7 @@ function toDrafts(plan: DashboardPlan): Draft[] {
     purpose: v.purpose,
     question_id: v.question_id,
     text: v.text,
+    page: v.page ?? 1,
   }));
 }
 
@@ -147,14 +148,14 @@ export function DesignWorkspace() {
     const dim = plan.dimensions.find((d) => d.kind !== "date" && !usedDims.has(d.field)) ?? plan.dimensions.find((d) => d.kind !== "date") ?? plan.dimensions[0];
     let draft: Draft;
     if (role === "kpi") {
-      draft = { key: `new-${Date.now()}`, role, type: "card", title: measure, measures: [measure], dimension: null, sort: null, purpose: `Headline value of ${measure}.`, question_id: null, text: [] };
+      draft = { key: `new-${Date.now()}`, role, type: "card", title: measure, measures: [measure], dimension: null, sort: null, purpose: `Headline value of ${measure}.`, question_id: null, text: [], page: 1 };
     } else if (role === "slicer") {
-      draft = { key: `new-${Date.now()}`, role, type: "slicer", title: dim ? dim.label.replace(/\b\w/g, (c) => c.toUpperCase()) : "Filter", measures: [], dimension: dim?.field ?? null, sort: null, purpose: "", question_id: null, text: [] };
+      draft = { key: `new-${Date.now()}`, role, type: "slicer", title: dim ? dim.label.replace(/\b\w/g, (c) => c.toUpperCase()) : "Filter", measures: [], dimension: dim?.field ?? null, sort: null, purpose: "", question_id: null, text: [], page: 1 };
     } else {
       const base = `${plan.measures[0] ?? "Value"} by ${dim ? dim.label.replace(/\b\w/g, (c) => c.toUpperCase()) : "Category"}`;
       let name = base;
       for (let n = 2; titles.has(name.toLowerCase()); n++) name = `${base} (${n})`;
-      draft = { key: `new-${Date.now()}`, role, type: "clustered_column", title: name, measures: plan.measures.slice(0, 1), dimension: dim?.field ?? null, sort: "desc", purpose: "", question_id: null, text: [] };
+      draft = { key: `new-${Date.now()}`, role, type: "clustered_column", title: name, measures: plan.measures.slice(0, 1), dimension: dim?.field ?? null, sort: "desc", purpose: "", question_id: null, text: [], page: 1 };
     }
     // Insert after the last visual of the same role so the layout groups stay together.
     const last = drafts.map((d) => d.role).lastIndexOf(role);
@@ -187,7 +188,7 @@ export function DesignWorkspace() {
 
       <section className="space-y-2 mb-8">
         <span className="inline-flex items-center gap-2 w-fit px-3 py-1 rounded-full bg-surface-container-lowest/80 font-code-sm text-code-sm uppercase tracking-wider text-on-surface-variant">
-          <span className="w-2 h-2 rounded-full bg-secondary-container" /> Dashboard Planner • 1280×720 single page
+          <span className="w-2 h-2 rounded-full bg-secondary-container" /> Dashboard Planner • 1280×720 • {plan?.pages?.length ?? 1} page{(plan?.pages?.length ?? 1) > 1 ? "s" : ""}
         </span>
         <h1 className="font-headline-xl text-headline-xl text-on-surface font-light tracking-tight">Plan your dashboard, then pick a design</h1>
         <p className="font-body-lg text-body-lg text-on-surface-variant max-w-3xl">
