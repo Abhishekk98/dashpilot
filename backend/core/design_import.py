@@ -39,6 +39,20 @@ MIN_W, MIN_H = 40, 30
 
 # --- models ---------------------------------------------------------------------------------
 
+class ValueStyle(BaseModel):
+    """Where and how a card shows its main number (offset from the card's top-left, in px)."""
+
+    dx: int
+    dy: int
+    w: int
+    h: int
+    size: float  # px
+    weight: int = 400
+    color: str | None = None
+    font: str = "Segoe UI"
+    align: Literal["left", "center", "right"] = "center"
+
+
 class DetectedBox(BaseModel):
     id: str  # box_01... in reading order
     x: int
@@ -56,6 +70,7 @@ class DetectedBox(BaseModel):
     title_color: str | None = None
     # Content area inside the card as [left, top, right, bottom] insets in px (None = whole card).
     inset: list[int] | None = None
+    value: ValueStyle | None = None  # the card's main number (KPI cards), as the design draws it
 
 
 class MappingItem(BaseModel):
@@ -312,14 +327,41 @@ _DETECT = r"""
   };
   const add = (map, k, w) => { if (k) map[k] = (map[k] || 0) + w; };
 
+  // The card's main number (a KPI's dummy value): where it sits in the content area and how it looks,
+  // so the Power BI card can show the real value the same way.
+  const valueStyle = (el, area) => {
+    if (!area) return null;
+    let best = null;
+    for (const d of el.querySelectorAll('*')) {
+      const t = own(d);
+      if (!t || !/[0-9]/.test(t) || !shown(d)) continue;
+      const r = rel(d), cs = getComputedStyle(d);
+      const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+      if (cx < area.x || cx > area.x + area.w || cy < area.y || cy > area.y + area.h) continue;
+      const size = parseFloat(cs.fontSize);
+      if (!best || size > best.size) {
+        // The text's own width (an inline box may be wider than its glyphs).
+        const range = document.createRange(); range.selectNodeContents(d);
+        const tr = range.getBoundingClientRect();
+        best = {x: tr.left - o.left, y: tr.top - o.top, w: tr.width, h: tr.height, size, weight: parseInt(cs.fontWeight) || 400,
+                color: cs.color, font: cs.fontFamily};
+      }
+    }
+    if (!best) return null;
+    const left = best.x - area.x, right = area.x + area.w - (best.x + best.w);
+    best.align = Math.abs(left - right) <= Math.max(6, area.w * 0.08) ? 'center' : left < right ? 'left' : 'right';
+    return best;
+  };
+
   const boxes = found.map(({el, titleEl}) => {
     const cs = getComputedStyle(el);
     const ts = titleEl ? getComputedStyle(titleEl) : cs;
     const area = contentArea(el, titleEl);
+    const value = valueStyle(el, area);
     collect(el, area);
     if (mark && area) el.setAttribute('data-dp-area', JSON.stringify({x: area.x + o.left, y: area.y + o.top, w: area.w, h: area.h}));
     return {
-      area,
+      area, value,
       ...rel(el),
       title: el.getAttribute('data-title') || (titleEl ? own(titleEl) : ''),
       text: (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 300),
@@ -377,6 +419,14 @@ def _inset(box: dict, area: dict | None) -> list[int] | None:
     return inset if inset[0] + inset[2] < box["w"] - 20 and inset[1] + inset[3] < box["h"] - 16 else None
 
 
+def _value(box: dict, v: dict | None) -> ValueStyle | None:
+    if not v or v["w"] < 4 or v["h"] < 4:
+        return None
+    return ValueStyle(dx=round(v["x"] - box["x"]), dy=round(v["y"] - box["y"]), w=round(v["w"]), h=round(v["h"]),
+                      size=round(v["size"], 1), weight=v["weight"], color=css_hex(v["color"]), font=_first_family(v["font"]),
+                      align=v["align"])
+
+
 def _first_family(stack: str) -> str:
     return (stack or "").split(",")[0].strip().strip("'\"") or "Segoe UI"
 
@@ -402,6 +452,7 @@ def extract(html: str, allow_scripts: bool = False) -> Extraction:
             background=css_hex(b["background"]), border=css_hex(b["border"]), radius=round(b["radius"]),
             title_font=_first_family(b["title_font"]), title_color=css_hex(b["title_color"]),
             inset=_inset(b, b.get("area")),
+            value=_value(b, b.get("value")),
         ))
     palette = _palette(data, boxes)
     chart = data.get("chart") or {}

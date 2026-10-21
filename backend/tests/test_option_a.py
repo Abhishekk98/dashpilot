@@ -3,6 +3,7 @@ geometric hiding, Stitch theme), fidelity report + build gate, API flow, fuzz on
 Stitch exports here are written by tests.stitch_like (Tailwind CDN + Material Symbols, fake charts)."""
 
 import io
+import json
 import zipfile
 
 import numpy as np
@@ -183,6 +184,22 @@ def test_option_a_flow_and_fidelity_gate(api, sample_bytes):
     assert imp["design"]["source"] == "option_a" and imp["design"]["source_hash"] == d["source_hash"]  # reused, not re-imported
     assert api.get(f"/api/projects/{pid}/design/original.png").status_code == 200
     assert api.post(f"/api/projects/{pid}/build", json={}).json()["build"]["valid"]
+
+    # KPI values the design draws left-aligned stay left-aligned in Power BI: a multi-row card that starts
+    # where the design's number starts, in its size/weight/color, bound to a hidden compact display measure.
+    z = zipfile.ZipFile(io.BytesIO(api.get(f"/api/projects/{pid}/build/download").content))
+    visuals = [json.loads(z.read(n)) for n in z.namelist() if n.endswith("/visual.json")]
+    kpis = [v for v in visuals if v["visual"]["visualType"] == "multiRowCard"]
+    assert len(kpis) == sum(1 for v in plan["visuals"] if v["role"] == "kpi")
+    kpi_plan = next(v for v in plan["visuals"] if v["role"] == "kpi")
+    first = next(v for v in kpis if v["position"]["y"] < kpi_plan["box"]["y"] + kpi_plan["box"]["h"] and abs(v["position"]["x"] - kpi_plan["box"]["x"]) < 40)
+    assert first["position"]["x"] == kpi_plan["box"]["x"] + 16  # the stitch_like card has p-4 (16px) padding
+    labels = first["visual"]["objects"]["cardTitle"][0]["properties"]
+    assert labels["fontSize"]["expr"]["Literal"]["Value"] == "18.0D" and labels["fontFamily"]["expr"]["Literal"]["Value"] == "'Segoe UI Semibold'"
+    measure = first["visual"]["query"]["queryState"]["Values"]["projections"][0]["field"]["Measure"]["Property"]
+    assert measure.endswith(" (KPI)")
+    model = next(z.read(n).decode() for n in z.namelist() if n.endswith("_Measures.tmdl"))
+    assert f"measure '{measure}' =" in model and "isHidden" in model and "zz KPI display" in model
 
     # A Stitch screenshot that does not match blocks the build until the user accepts it.
     shot = Image.new("RGB", (1280, 720), (10, 200, 10))

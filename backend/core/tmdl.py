@@ -172,7 +172,10 @@ def measures_table(measures) -> str:
             lines += ["\t\t\t" + line for line in expression.splitlines()]
         else:
             lines.append(f"\tmeasure {name(m.name)} = {expression}")
-        lines.append(f"\t\tformatString: {m.format_string}")
+        if m.format_string:
+            lines.append(f"\t\tformatString: {m.format_string}")
+        if getattr(m, "hidden", False):
+            lines.append("\t\tisHidden")
         lines.append(f"\t\tdisplayFolder: {m.folder}")
         lines.append(f"\t\tlineageTag: {_tag(MEASURES_TABLE, m.name)}")
         blocks.append("\n".join(lines))

@@ -1,0 +1,28 @@
+{
+  "_comment": "DashPilot PBIR visual template: a KPI value drawn left/right-aligned like the design (multi-row card with one value; the plain card always centers). {{token}} = theme color/font.",
+  "visualType": "multiRowCard",
+  "roles": {
+    "measures": "Values"
+  },
+  "max_measures": 1,
+  "objects": {
+    "dataLabels": {
+      "color": "{{value}}",
+      "fontFamily": "{{value_font}}",
+      "fontSize": 18,
+      "labelDisplayUnits": 0
+    },
+    "cardTitle": {
+      "color": "{{value}}",
+      "fontFamily": "{{value_font}}",
+      "fontSize": 18
+    },
+    "categoryLabels": {
+      "show": false
+    },
+    "card": {
+      "barShow": false,
+      "outline": "None"
+    }
+  }
+}

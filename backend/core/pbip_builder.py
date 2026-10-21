@@ -209,13 +209,96 @@ def _tokens(theme: dict, palette_muted: str | None) -> dict[str, str]:
             "value": callout.get("color", text), "value_font": callout.get("fontFace", "Segoe UI")}
 
 
+PBI_SAFE_FONTS = {"Segoe UI", "Arial", "Calibri", "Georgia", "Verdana", "Tahoma", "Trebuchet MS", "Cambria", "Candara",
+                  "Corbel", "Consolas", "Courier New", "Times New Roman", "DIN"}
+KPI_PAD_X, KPI_PAD_Y = 0, 0  # multi-row card's own inset before its first value (measured in Power BI Desktop)
+
+
+def _value_font(font: str, weight: int) -> str:
+    """Power BI picks weight through the font name (Segoe UI Semibold / Bold)."""
+    base = font if font in PBI_SAFE_FONTS else "Segoe UI"
+    if base == "Segoe UI" and weight >= 700:
+        return "Segoe UI Bold"
+    if base == "Segoe UI" and weight >= 550:
+        return "Segoe UI Semibold"
+    return base
+
+
+KPI_FOLDER = "zz KPI display"
+
+
+def kpi_display_name(measure: str) -> str:
+    return f"{measure} (KPI)"
+
+
+def _kpi_display_dax(measure: str, fmt: str) -> str:
+    """The value as the design shows it (compact like Power BI's auto units), as text: the multi-row card
+    that draws left/right-aligned KPIs has no display-units option of its own. Percentages and values
+    under 10,000 keep the measure's own format; larger ones get K/M/B with 2 decimals."""
+    ref = "[" + measure.replace("]", "]]") + "]"
+    own = fmt.replace('"', '""')
+    if "%" in fmt:
+        return f'VAR v = {ref} RETURN IF(ISBLANK(v), BLANK(), FORMAT(v, "{own}"))'
+    first = fmt.split(";")[0]
+    prefix = first[: len(first) - len(first.lstrip("\\$€£₹¥ "))]  # currency symbol in front, if any
+    scaled = (prefix + "#,0.00").replace('"', '""')
+    return (f'VAR v = {ref} VAR a = ABS(v) RETURN IF(ISBLANK(v), BLANK(), SWITCH(TRUE(), '
+            f'a >= 1E9, FORMAT(v / 1E9, "{scaled}") & "B", a >= 1E6, FORMAT(v / 1E6, "{scaled}") & "M", '
+            f'a >= 1E4, FORMAT(v / 1E3, "{scaled}") & "K", FORMAT(v, "{own}")))')
+
+
+def kpi_display_measures(inp: BuildInputs) -> list:
+    """Hidden helper measures for the KPI cards drawn left/right-aligned (one per measure used)."""
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    boxes = {b.id: b for b in inp.boxes}
+    mapping = {m.visual_id: m for m in inp.mapping}
+    by_name = {m.name: m for m in inp.measures}
+    out, seen = [], set()
+    for v in inp.plan.visuals:
+        item = mapping.get(v.id)
+        val = kpi_value(v, item, boxes.get(item.box_id or "")) if item and item.placed else None
+        if val is None or val.align == "center" or not v.measures or v.measures[0] in seen or v.measures[0] not in by_name:
+            continue
+        m = by_name[v.measures[0]]
+        seen.add(m.name)
+        out.append(SimpleNamespace(name=kpi_display_name(m.name), expression=_kpi_display_dax(m.name, m.format_string or "#,0.##"), format_string="",
+                                   folder=KPI_FOLDER, description=f"{m.name} as the dashboard's KPI card shows it (compact).", hidden=True))
+    return out
+
+
+def kpi_value(v: PlanVisual, item: MappingItem, box: DetectedBox | None):
+    """The design's KPI number style when it can be reproduced (a design-drawn title is kept)."""
+    if v.role != "kpi" or item.pbi_title or box is None or box.value is None:
+        return None
+    return box.value
+
+
 def visual_json(v: PlanVisual, item: MappingItem, box: DetectedBox | None, order: int, tokens: dict[str, str]) -> dict:
-    tpl = template(v.type)
+    val = kpi_value(v, item, box)
+    aligned = val is not None and val.align != "center"
+    tpl = template("kpi_left" if aligned else v.type)
     x, y, w, h = visual_rect(v, item, box)
     spec = _fill(tpl["objects"], tokens)
     show_title = item.pbi_title
     if v.role == "kpi":
-        spec.setdefault("categoryLabels", {})["show"] = show_title  # the card's own label doubles as its title
+        if val is not None:
+            # The real value in the design's own size, weight, color and place.
+            target = "dataLabels" if aligned else "labels"
+            spec[target].update({"fontSize": round(val.size * 0.75, 1), "fontFamily": _value_font(val.font, val.weight)})
+            if val.color:
+                spec[target]["color"] = val.color
+            if aligned:
+                # The compact display measure is text, which the multi-row card draws as its "card title".
+                spec["cardTitle"] = dict(spec[target])
+                # The multi-row card draws its value top-left: start the visual where the design's number starts
+                # (right-aligned designs keep the left edge of the number; real values may be wider).
+                x0, y0 = item.x + val.dx - KPI_PAD_X, item.y + val.dy - KPI_PAD_Y
+                right, bottom = x + w, y + h
+                x, y = max(item.x, x0), max(item.y, y0)
+                w, h = max(40, right - x), max(30, bottom - y)
+        if not aligned:
+            spec.setdefault("categoryLabels", {})["show"] = show_title  # the card's own label doubles as its title
         show_title = False
     if v.role == "slicer":
         spec.setdefault("header", {})["show"] = show_title
@@ -225,7 +308,8 @@ def visual_json(v: PlanVisual, item: MappingItem, box: DetectedBox | None, order
     if len(v.measures) > 1 and "legend" in spec:
         spec["legend"]["show"] = True
     visual: dict = {"visualType": tpl["visualType"]}
-    query = _query(v, tpl)
+    # Aligned KPI cards show the compact display measure (see kpi_display_measures).
+    query = _query(v.model_copy(update={"measures": [kpi_display_name(v.measures[0])]}) if aligned and v.measures else v, tpl)
     if query:
         visual["query"] = query
     obj = objects(spec)
@@ -339,7 +423,7 @@ def build(inp: BuildInputs) -> dict[str, bytes]:
     folder = folder_name(inp.project_name)
     model_root = f"{folder}.SemanticModel"
     files: dict[str, bytes] = {}
-    model = tmdl.build_files(inp.model, inp.cleaned, inp.project_name, inp.measures, inp.data_folder)
+    model = tmdl.build_files(inp.model, inp.cleaned, inp.project_name, inp.measures + kpi_display_measures(inp), inp.data_folder)
     for path, text in model.items():
         files[path] = text.encode("utf-8")
     files[f"{model_root}/definition.pbism"] = _json({"$schema": SCHEMAS["pbism"], "version": "4.2", "settings": {}})
