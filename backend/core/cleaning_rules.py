@@ -394,19 +394,26 @@ def _detect_excel_serial(t: TableProfile, df: pd.DataFrame, ctx: RuleContext) ->
 
 def _detect_date_outliers(t: TableProfile, df: pd.DataFrame, ctx: RuleContext) -> list[CleaningStep]:
     steps = []
-    low, high = pd.Timestamp("1900-01-01"), ctx.today + pd.Timedelta(days=1)
+    base_low, high = pd.Timestamp("1900-01-01"), ctx.today + pd.Timedelta(days=1)
     for col in t.column_profiles:
         if col.detected_type not in ("date", "datetime"):
             continue
         d = to_datetimes(df[col.name])
+        valid = d.dropna()
+        low = base_low
+        if len(valid) >= 10:
+            q05 = valid.quantile(0.05)
+            is_dob = bool(re.search(r"dob|birth|born", col.name, re.I))
+            if not is_dob and q05.year >= 2015:
+                low = pd.Timestamp(f"{min(q05.year - 5, 2010)}-01-01")
         bad = (d.notna() & ((d < low) | (d > high))).fillna(False)
         n = int(bad.sum())
         if not n:
             continue
         example = d[bad].iloc[0]
         texts = {
-            "blank": (f"Blank {_plural(n, 'impossible date')} in {col.name}", f"Dates before 1900 or in the future (e.g. {example:%Y-%m-%d}) are usually typos or placeholders; they are set to blank so the date table stays compact."),
-            "flag": (f"Flag {_plural(n, 'suspicious date')} in {col.name}", f"Dates before 1900 or in the future (e.g. {example:%Y-%m-%d}) are kept, and a {col.name}_suspect_date column marks them."),
+            "blank": (f"Blank {_plural(n, 'impossible date')} in {col.name}", f"Dates before {low:%Y} or in the future (e.g. {example:%Y-%m-%d}) are usually typos or placeholders; they are set to blank so the date table stays compact."),
+            "flag": (f"Flag {_plural(n, 'suspicious date')} in {col.name}", f"Dates before {low:%Y} or in the future (e.g. {example:%Y-%m-%d}) are kept, and a {col.name}_suspect_date column marks them."),
         }
         step = _step(
             t, f"{col.name}::date_outliers", kind="date_outliers", impact="Medium", category="Date Quality",

@@ -164,8 +164,10 @@ def template_html(plan: DashboardPlan, context: BusinessContext, archetype: Arch
     display: flex; flex-direction: column; overflow: hidden; }}
   .dp-title {{ margin: 0 0 8px; font: 600 13px/1.25 '{heading}', 'Segoe UI', sans-serif; color: {t['title']}; letter-spacing: -0.005em; }}
   .dp-chart {{ flex: 1; border-radius: 10px; background: {t['area']}; font-family: 'Segoe UI', sans-serif; }}
-  .dp-kpi .dp-chart {{ background: transparent; }}
-  .dp-kpi-bar {{ position: absolute; left: 16px; right: 16px; bottom: 10px; height: 3px; border-radius: 3px; background: {t['kpi_bar']}; opacity: 0.85; }}
+  .dp-kpi {{ padding: 8px 12px; }}
+  .dp-kpi .dp-title {{ margin: 0 0 2px; font: 600 11px/1.2 '{heading}', 'Segoe UI', sans-serif; color: {t['muted']}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+  .dp-kpi .dp-chart {{ background: transparent; min-height: 48px; }}
+  .dp-kpi-bar {{ position: absolute; left: 12px; right: 12px; bottom: 6px; height: 3px; border-radius: 3px; background: {t['kpi_bar']}; opacity: 0.85; }}
   .dp-slicer {{ flex-direction: row; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; }}
   .dp-slicer-label {{ font: 500 11px '{body}', 'Segoe UI', sans-serif; color: {t['muted']}; white-space: nowrap; }}
   .dp-slicer .dp-chart {{ height: 22px; flex: 1; }}

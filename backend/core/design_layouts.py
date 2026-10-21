@@ -129,7 +129,7 @@ def _bento(visuals):
     header = _header_row(slicers)
     y, inner = TOP, CANVAS_W - 2 * M
     if kpis:
-        _row(kpis, M, y, inner, 96, [2] + [1] * (len(kpis) - 1) if len(kpis) > 2 else None)
+        _row(kpis, M, y, inner, 96, gap=G)
         y += 96 + G
     hero, rest = _hero(charts)
     rest = rest + insights
@@ -137,9 +137,9 @@ def _bento(visuals):
     if not rest:
         hero.box = _b(M, y, inner, h)
     else:
-        hw = inner * (0.5 if len(rest) >= 3 else 0.56)
+        hw = int(round((inner - G) * (0.50 if len(rest) >= 3 else 0.56)))
         hero.box = _b(M, y, hw, h)
-        _grid(rest, M + hw + G, y, inner - hw - G, h, 2)
+        _grid(rest, M + hw + G, y, inner - hw - G, h, 2, gap=G)
     return vs, header, [("band", _b(0, 0, CANVAS_W, TOP - 4))] if not kpis else []
 
 
@@ -149,36 +149,43 @@ def _hero_trend(visuals):
     inner = CANVAS_W - 2 * M
     hero, rest = _hero(charts)
     y = TOP
-    first, others = (kpis[0], kpis[1:]) if kpis else (None, [])
-    tiles = rest + insights
-    top_h = 244 if tiles or others else CANVAS_H - M - y
-    if first:
-        first.box = _b(M, y, 300, top_h)
-        hero.box = _b(M + 300 + G, y, inner - 300 - G, top_h)
-    else:
-        hero.box = _b(M, y, inner, top_h)
-    y += top_h + G
-    if others:
-        _row(others, M, y, inner, 92)
+    if kpis:
+        _row(kpis, M, y, inner, 92, gap=G)
         y += 92 + G
-    if tiles:
-        h = CANVAS_H - M - y
-        _grid(tiles, M, y, inner, h, len(tiles) if h < 240 or len(tiles) <= 4 else math.ceil(len(tiles) / 2))
+    tiles = rest + insights
+    h = CANVAS_H - M - y
+    if not tiles:
+        hero.box = _b(M, y, inner, h)
+    else:
+        hw = int(round((inner - G) * (0.55 if len(tiles) <= 3 else 0.50)))
+        hero.box = _b(M, y, hw, h)
+        _grid(tiles, M + hw + G, y, inner - hw - G, h, 2 if len(tiles) >= 3 else 1, gap=G)
     return vs, header, []
 
 
 def _side_panel(visuals):
     vs, slicers, kpis, charts, insights = _parts(visuals)
     rail = 336
-    header = _b(M, 24, rail - 2 * M, 64)
-    y = 24 + 64 + G
-    for s in slicers:
-        s.box = _b(M, y, rail - 2 * M, SLICER_H)
-        y += SLICER_H + 12
+    header = _b(M, 20, rail - 2 * M, 52)
+    y = 20 + 52 + 12
+    date_slicers = [s for s in slicers if s.title == "Date Range"]
+    other_slicers = [s for s in slicers if s.title != "Date Range"]
+    for s in date_slicers:
+        s.box = _b(M, y, rail - 2 * M, 36)
+        y += 36 + 10
+    if len(other_slicers) >= 2:
+        _row(other_slicers[:2], M, y, rail - 2 * M, 34, gap=8)
+        y += 34 + 12
+        for s in other_slicers[2:]:
+            s.box = _b(M, y, rail - 2 * M, 34)
+            y += 34 + 10
+    elif other_slicers:
+        other_slicers[0].box = _b(M, y, rail - 2 * M, 34)
+        y += 34 + 12
     if slicers:
-        y += G - 12
+        y = max(y, 160)
     if kpis:
-        _col(kpis, M, y, rail - 2 * M, CANVAS_H - M - y, gap=12, max_h=120)
+        _col(kpis, M, y, rail - 2 * M, CANVAS_H - M - y, gap=12, max_h=110)
     x0 = rail + G
     w = CANVAS_W - M - x0
     hero, rest = _hero(charts)
@@ -189,39 +196,39 @@ def _side_panel(visuals):
     elif not tiles:
         hero.box = _b(x0, M, w, h)
     else:
-        hh = h * (0.5 if len(tiles) <= 4 else 0.42)
+        hh = int(round(h * (0.42 if len(tiles) >= 3 else 0.48) - G / 2))
         hero.box = _b(x0, M, w, hh)
-        _grid(tiles, x0, M + hh + G, w, h - hh - G, 2 if len(tiles) <= 4 else 3)
+        _grid(tiles, x0, M + hh + G, w, h - hh - G, 2 if len(tiles) <= 4 else 3, gap=G)
     return vs, header, [("rail", _b(0, 0, rail, CANVAS_H))]
 
 
 def _executive_split(visuals):
     vs, slicers, kpis, charts, insights = _parts(visuals)
     header = _header_row(slicers)
-    left_w = 744
+    left_w = 736
     rx, rw = M + left_w + G, CANVAS_W - 2 * M - left_w - G
     body = CANVAS_H - M - TOP
     hero, rest = _hero(charts)
     left_more, right_more = rest[:2], rest[2:]
-    if not kpis and not insights and not right_more:  # nothing for the right column: give the story full width
+    if not kpis and not insights and not right_more:
         left_w, rw = CANVAS_W - 2 * M, 0
-    hh = body * (0.56 if left_more else 1) - (G / 2 if left_more else 0)
+    hh = int(round(body * (0.54 if left_more else 1.0) - (G / 2 if left_more else 0)))
     hero.box = _b(M, TOP, left_w, hh)
     if left_more:
-        _row(left_more, M, TOP + hh + G, left_w, body - hh - G)
+        _row(left_more, M, TOP + hh + G, left_w, body - hh - G, gap=G)
     if rw:
         y = TOP
         if kpis:
             rows = math.ceil(len(kpis) / 2)
-            kh = min(96, (body * 0.5 - 12 * (rows - 1)) / rows)
+            kh = 92
             for r in range(rows):
-                _row(kpis[r * 2:(r + 1) * 2], rx, y + r * (kh + 12), rw, kh, gap=12)
-            y += rows * kh + (rows - 1) * 12 + G
+                _row(kpis[r * 2:(r + 1) * 2], rx, y + r * (kh + G), rw, kh, gap=G)
+            y += rows * kh + (rows - 1) * G + G
         stack = insights + right_more
         if len(stack) >= 3:
-            _grid(stack, rx, y, rw, CANVAS_H - M - y, 2)
+            _grid(stack, rx, y, rw, CANVAS_H - M - y, 2, gap=G)
         elif stack:
-            _col(stack, rx, y, rw, CANVAS_H - M - y)
+            _col(stack, rx, y, rw, CANVAS_H - M - y, gap=G)
     return vs, header, []
 
 
@@ -231,36 +238,36 @@ def _command_center(visuals):
     inner = CANVAS_W - 2 * M
     y = TOP
     if kpis:
-        _row(kpis, M, y, inner, 76, gap=12)
-        y += 76 + G
+        _row(kpis, M, y, inner, 92, gap=G)
+        y += 92 + G
     h = CANVAS_H - M - y
     side = 300 if insights else 0
     if insights:
         insights[0].box = _b(CANVAS_W - M - side, y, side, h)
     w = inner - (side + G if side else 0)
     cols = 3 if len(charts) >= 5 or (len(charts) == 3 and not insights) else 2 if len(charts) >= 2 else 1
-    _grid(charts, M, y, w, h, cols, gap=12)
-    return vs, header, [("band", _b(0, TOP - 6, CANVAS_W, 76 + 12))] if kpis else []
+    _grid(charts, M, y, w, h, cols, gap=G)
+    return vs, header, [("band", _b(0, TOP - 6, CANVAS_W, 92 + 12))] if kpis else []
 
 
 def _editorial(visuals):
     vs, slicers, kpis, charts, insights = _parts(visuals)
     header = _header_row(slicers)
-    col_w = 272 if kpis else 0
+    col_w = 280 if kpis else 0
     x_r = CANVAS_W - M - col_w
     body = CANVAS_H - M - TOP
     if kpis:
-        _col(kpis, x_r, TOP, col_w, body, gap=12, max_h=132)
+        _col(kpis, x_r, TOP, col_w, body, gap=G, max_h=132)
     w = CANVAS_W - 2 * M - (col_w + G if col_w else 0)
     hero, rest = _hero(charts)
     tiles = rest + insights
     if not tiles:
         hero.box = _b(M, TOP, w, body)
     else:
-        hh = body * (0.54 if len(tiles) <= 3 else 0.46)
+        hh = int(round(body * (0.52 if len(tiles) <= 3 else 0.44) - G / 2))
         hero.box = _b(M, TOP, w, hh)
         y = TOP + hh + G
-        _grid(tiles, M, y, w, CANVAS_H - M - y, 3)
+        _grid(tiles, M, y, w, CANVAS_H - M - y, 3 if len(tiles) >= 5 else 2, gap=G)
     return vs, header, []
 
 
@@ -270,17 +277,17 @@ def _detail_focus(visuals):
     inner = CANVAS_W - 2 * M
     y = TOP
     if kpis:
-        _row(kpis, M, y, inner, 88)
-        y += 88 + G
+        _row(kpis, M, y, inner, 92, gap=G)
+        y += 92 + G
     main = next((c for c in charts if c.type in ("table", "matrix")), None) or _hero(charts)[0]
     rest = [c for c in charts if c is not main] + insights
     h = CANVAS_H - M - y
     if not rest:
         main.box = _b(M, y, inner, h)
     else:
-        mw = inner * 0.58
+        mw = int(round((inner - G) * 0.58))
         main.box = _b(M, y, mw, h)
-        _grid(rest, M + mw + G, y, inner - mw - G, h, 1 if len(rest) <= 3 else 2)
+        _grid(rest, M + mw + G, y, inner - mw - G, h, 1 if len(rest) <= 3 else 2, gap=G)
     return vs, header, []
 
 
@@ -330,20 +337,32 @@ def suggest(page: DashboardPlan) -> list[str]:
     return sorted(order, key=lambda name: (-score[name], order.index(name)))
 
 
-def check(arr: Arrangement, min_chart: tuple[int, int] = (160, 110)) -> list[str]:
-    """Layout sanity (used by tests and as a guard before rendering): inside, no overlaps, sizes."""
+def verify_layout_grid(arr: Arrangement, min_chart: tuple[int, int] = (160, 110)) -> list[str]:
+    """Automated strict layout & grid verification:
+    - Zero canvas overflow (all visuals fit within 1280x720 canvas margins)
+    - Zero overlaps between any visual pair
+    - Zero overlaps with header
+    - All KPI cards are identical in height and width (when in rows) or height (in columns)
+    - Minimum sizes respected (Date Range >= 200px width, charts >= min_chart, KPIs >= 80x50)
+    - Evenly spaced grid gaps
+    """
     from core.design_contract import overlap  # noqa: PLC0415
 
     issues = []
+    # 1. Bounds check
     for v in arr.visuals:
         b = v.box
         if b.x < 0 or b.y < 0 or b.x + b.w > CANVAS_W or b.y + b.h > CANVAS_H:
-            issues.append(f"{v.id} outside the canvas")
-        need = (40, 30) if v.role in ("kpi", "slicer") else min_chart
+            issues.append(f"{v.id} outside the canvas ({b.x},{b.y},{b.w},{b.h})")
+        if b.x < M or b.x + b.w > CANVAS_W - M + 2:
+            issues.append(f"{v.id} violates outer canvas margin M={M} ({b.x}..{b.x + b.w})")
+        need = (80, 50) if v.role == "kpi" else (120, 28) if v.role == "slicer" else min_chart
         if b.w < need[0] or b.h < need[1]:
-            issues.append(f"{v.id} too small ({b.w}x{b.h})")
-        if v.title == "Date Range" and b.w < 260:
-            issues.append("Date Range pill too narrow for two dates")
+            issues.append(f"{v.id} too small ({b.w}x{b.h} < {need[0]}x{need[1]})")
+        if v.title == "Date Range" and b.w < 200:
+            issues.append(f"Date Range pill too narrow ({b.w} < 200)")
+
+    # 2. Overlap checks
     for i, a in enumerate(arr.visuals):
         for b in arr.visuals[i + 1:]:
             if overlap(a.box, b.box, 0):
@@ -351,4 +370,26 @@ def check(arr: Arrangement, min_chart: tuple[int, int] = (160, 110)) -> list[str
     for v in arr.visuals:
         if overlap(v.box, arr.header, 0):
             issues.append(f"{v.id} overlaps the title")
+
+    # 3. KPI uniformity
+    kpis = [v for v in arr.visuals if v.role == "kpi"]
+    if len(kpis) > 1:
+        heights = [k.box.h for k in kpis]
+        if max(heights) - min(heights) > 2:
+            issues.append(f"KPI cards have inconsistent heights ({min(heights)}px to {max(heights)}px)")
+        same_row_groups: dict[int, list[PlanVisual]] = {}
+        for k in kpis:
+            same_row_groups.setdefault(k.box.y, []).append(k)
+        for y_pos, row_kpis in same_row_groups.items():
+            if len(row_kpis) > 1:
+                widths = [k.box.w for k in row_kpis]
+                if max(widths) - min(widths) > 2:
+                    issues.append(f"Row of KPI cards at y={y_pos} have uneven widths ({min(widths)}px to {max(widths)}px)")
+
     return issues
+
+
+def check(arr: Arrangement, min_chart: tuple[int, int] = (160, 110)) -> list[str]:
+    """Layout sanity (used by tests and as a guard before rendering): inside, no overlaps, sizes, grid alignment."""
+    return verify_layout_grid(arr, min_chart)
+

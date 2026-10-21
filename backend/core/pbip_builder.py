@@ -210,8 +210,14 @@ def visual_rect(v: PlanVisual, item: MappingItem, box: DetectedBox | None) -> tu
         l, t, r, b = box.inset
         if v.role == "slicer":  # slicers need the full pill height for the dropdown
             t = b = 0
+    elif v.role == "kpi":
+        # KPI cards: give the Power BI visual ample height below the background title
+        # so values and labels never get cut off at the bottom.
+        l, r = 8, 8
+        t = 20
+        b = 6
     else:
-        l, t, r, b = (8, 34, 8, 8) if v.role in ("chart", "kpi", "insights") else (6, 0, 6, 0)
+        l, t, r, b = (8, 34, 8, 8) if v.role in ("chart", "insights") else (6, 0, 6, 0)
     rect = (x + l, y + t, w - l - r, h - t - b)
     return rect if rect[2] >= 20 and rect[3] >= 16 else (x, y, w, h)
 
@@ -292,6 +298,77 @@ def kpi_value(v: PlanVisual, item: MappingItem, box: DetectedBox | None):
     return box.value
 
 
+def _filter_no_blank_date(field_str: str) -> dict:
+    table, col = column_ref(field_str)
+    return {
+        "name": _id("flt_blank", field_str),
+        "field": {"Column": {"Expression": {"SourceRef": {"Entity": table}}, "Property": col}},
+        "type": "Categorical",
+        "filter": {
+            "Version": 2,
+            "From": [{"Name": "d", "Entity": table, "Type": 0}],
+            "Where": [{
+                "Condition": {
+                    "Not": {
+                        "Expression": {
+                            "In": {
+                                "Expressions": [{"Column": {"Expression": {"SourceRef": {"Source": "d"}}, "Property": col}}],
+                                "Values": [[{"Literal": {"Value": "null"}}]]
+                            }
+                        }
+                    }
+                }
+            }]
+        }
+    }
+
+
+def _filter_top_n(v: PlanVisual, card_h: int) -> dict:
+    table, col = column_ref(v.dimension or "")
+    item_count = 5 if card_h < 160 else (8 if card_h < 260 else 10)
+    return {
+        "name": _id("flt_topn", v.dimension or ""),
+        "field": {"Column": {"Expression": {"SourceRef": {"Entity": table}}, "Property": col}},
+        "type": "VisualTopN",
+        "filter": {
+            "Version": 2,
+            "From": [{"Name": "t", "Entity": table, "Type": 0}],
+            "Where": [{
+                "Condition": {
+                    "VisualTopN": {
+                        "ItemCount": item_count
+                    }
+                }
+            }]
+        }
+    }
+
+
+def _filter_exclude_unknown(field_str: str) -> dict:
+    table, col = column_ref(field_str)
+    return {
+        "name": _id("flt_unknown", field_str),
+        "field": {"Column": {"Expression": {"SourceRef": {"Entity": table}}, "Property": col}},
+        "type": "Categorical",
+        "filter": {
+            "Version": 2,
+            "From": [{"Name": "t", "Entity": table, "Type": 0}],
+            "Where": [{
+                "Condition": {
+                    "Not": {
+                        "Expression": {
+                            "In": {
+                                "Expressions": [{"Column": {"Expression": {"SourceRef": {"Source": "t"}}, "Property": col}}],
+                                "Values": [[{"Literal": {"Value": "'Unknown'"}}], [{"Literal": {"Value": "null"}}]]
+                            }
+                        }
+                    }
+                }
+            }]
+        }
+    }
+
+
 def visual_json(v: PlanVisual, item: MappingItem, box: DetectedBox | None, order: int, tokens: dict[str, str], page: int = 1,
                 sync: bool = False) -> dict:
     val = kpi_value(v, item, box)
@@ -301,49 +378,69 @@ def visual_json(v: PlanVisual, item: MappingItem, box: DetectedBox | None, order
     spec = _fill(tpl["objects"], tokens)
     show_title = item.pbi_title
     if v.role == "kpi":
+        # Dynamic auto font size based on card size so values and labels never clip
+        if h >= 85 and w >= 150:
+            font_size = 20
+        elif h >= 65 and w >= 120:
+            font_size = 18
+        elif h >= 50:
+            font_size = 16
+        else:
+            font_size = 14
+
+        target = "dataLabels" if aligned else "labels"
         if val is not None:
-            # The real value in the design's own size, weight, color and place.
-            target = "dataLabels" if aligned else "labels"
             spec[target].update({"fontSize": round(val.size * 0.75, 1), "fontFamily": _value_font(val.font, val.weight)})
             if val.color:
                 spec[target]["color"] = val.color
             if aligned:
-                # The compact display measure is text, which the multi-row card draws as its "card title".
                 spec["cardTitle"] = dict(spec[target])
-                # The multi-row card draws its value top-left: start the visual where the design's number starts
-                # (right-aligned designs keep the left edge of the number; real values may be wider).
                 x0, y0 = item.x + val.dx - KPI_PAD_X, item.y + val.dy - KPI_PAD_Y
                 right, bottom = x + w, y + h
                 x, y = max(item.x, x0), max(item.y, y0)
                 w, h = max(40, right - x), max(30, bottom - y)
+        else:
+            if target in spec:
+                spec[target]["fontSize"] = font_size
         if not aligned:
-            spec.setdefault("categoryLabels", {})["show"] = show_title  # the card's own label doubles as its title
+            spec.setdefault("categoryLabels", {})["show"] = show_title
         show_title = False
     if v.role == "slicer":
-        # The slicer header is its title; Power BI would show the raw column name (payment_channel).
         spec.setdefault("header", {}).update({"show": show_title, **({"text": v.title, "fontColor": tokens["text"]} if show_title else {})})
         show_title = False
         if v.dimension == DATE_SLICER_FIELD:
-            # A real date range: two date inputs (from – to) on Dim_Date, no slider (it needs height the pill lacks).
             spec.setdefault("data", {})["mode"] = "Between"
             spec["slider"] = {"show": False}
             spec["date"] = {"fontColor": tokens["text"], "background": tokens["card"], "textSize": 8}
     if len(v.measures) > 1 and "legend" in spec:
         spec["legend"]["show"] = True
     visual: dict = {"visualType": tpl["visualType"]}
-    # Aligned KPI cards show the compact display measure (see kpi_display_measures).
     query = _query(v.model_copy(update={"measures": [kpi_display_name(v.measures[0])]}) if aligned and v.measures else v, tpl)
     if query:
-        if v.role == "slicer":  # friendly field name wherever Power BI shows it (header, tooltips, filter pane)
+        if v.role == "slicer":
             for role in query["queryState"].values():
                 for p in role["projections"]:
                     p["displayName"] = v.title
         visual["query"] = query
     obj = objects(spec)
     if v.type == "text_box":
+        raw_lines = v.text or ["Pin insights in DashPilot Step 6 to fill this box."]
+        deduped = []
+        seen_words = set()
+        seen_nums = set()
+        for line in raw_lines:
+            hl = line.strip()
+            norm = re.sub(r"\b(was|is|for|in|to date|versus)\b", "", hl.lower())
+            words = frozenset(re.findall(r"\b[a-z0-9.%+-]+\b", norm))
+            nums = tuple(sorted(re.findall(r"\d+[\d.,]*%?[KMBkmb]?", hl)))
+            if words not in seen_words and (not nums or nums not in seen_nums):
+                seen_words.add(words)
+                if nums:
+                    seen_nums.add(nums)
+                deduped.append(hl)
         obj["general"] = [{"properties": {"paragraphs": [
             {"textRuns": [{"value": "• " + line, "textStyle": {"fontFamily": "Segoe UI", "fontSize": "10pt", "color": tokens["text"]}}]}
-            for line in (v.text or ["Pin insights in DashPilot Step 6 to fill this box."])
+            for line in deduped[:3]
         ]}}]
     if obj:
         visual["objects"] = obj
@@ -355,15 +452,33 @@ def visual_json(v: PlanVisual, item: MappingItem, box: DetectedBox | None, order
         "title": {"show": show_title, **({"text": v.title, "fontColor": tokens["text"], "fontFamily": "Segoe UI Semibold", "fontSize": 11} if show_title else {})},
     }
     visual["visualContainerObjects"] = objects(container)
-    if v.role == "slicer" and sync:  # the same slicer on every page keeps one selection
+    if v.role == "slicer" and sync:
         visual["syncGroup"] = {"groupName": _id("sync", v.id), "fieldChanges": True, "filterChanges": True}
     visual["drillFilterOtherVisuals"] = True
-    return {
+
+    # Visual-level filters (PBIR filterConfig)
+    filters = []
+    if v.type in ("line", "area") and v.dimension:
+        # Filter out (Blank) dates so trend chart has a clean timeline
+        filters.append(_filter_no_blank_date(v.dimension))
+    elif v.type in ("clustered_bar", "stacked_bar") and v.dimension and v.measures:
+        # Show top N categories scaled to card height so no scrollbar appears
+        filters.append(_filter_top_n(v, h))
+    elif v.type in ("donut", "pie") and v.dimension:
+        # If dimension is sparse / has high blanks (e.g. cancellation reasons), filter out "Unknown"
+        table, col = column_ref(v.dimension)
+        if "cancellation" in col.lower() or "reason" in col.lower():
+            filters.append(_filter_exclude_unknown(v.dimension))
+
+    out_visual = {
         "$schema": SCHEMAS["visual"],
         "name": _id("visual", v.id) if page == 1 else _id("visual", f"p{page}", v.id),
         "position": {"x": x, "y": y, "z": (order + 1) * 1000, "height": h, "width": w, "tabOrder": (order + 1) * 1000},
         "visual": visual,
     }
+    if filters:
+        out_visual["filterConfig"] = {"filters": filters}
+    return out_visual
 
 
 # --- report -------------------------------------------------------------------------------------

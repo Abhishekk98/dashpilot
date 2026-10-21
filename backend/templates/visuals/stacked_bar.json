@@ -12,7 +12,8 @@
       "labelColor": "{{muted}}",
       "fontFamily": "Segoe UI",
       "fontSize": 9,
-      "showAxisTitle": false
+      "showAxisTitle": false,
+      "innerPadding": 10
     },
     "valueAxis": {
       "show": true,

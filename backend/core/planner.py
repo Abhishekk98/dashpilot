@@ -75,6 +75,7 @@ class DimensionOption(BaseModel):
     label: str
     kind: Literal["date", "category", "geo"]
     cardinality: int
+    null_pct: float = 0.0
 
 
 class DashboardPlan(BaseModel):
@@ -131,6 +132,7 @@ def dimension_options(model: ModelPlan, report: QualityReport) -> list[Dimension
                 out.append(DimensionOption(
                     field=f"{t.name}[{c.name}]", label=c.name.replace("_", " "),
                     kind="geo" if prof.role == "geo_dimension" else "category", cardinality=prof.distinct_count,
+                    null_pct=prof.null_pct,
                 ))
     return out
 
@@ -200,7 +202,10 @@ def _pick_charts(measures: list[Measure], dims: list[DimensionOption], insights:
     if ranked:
         top = next((d for d in ranked if d.kind == "category"), ranked[0])  # geo columns get a map below
         add("top", "clustered_bar", f"{primary} by {top.label.title()}", [primary], top, "desc")
-    small = next((d for d in cats if 2 <= d.cardinality <= 6 and (not ranked or d.field != ranked[0].field)), None)
+    clean_cats = [d for d in cats if d.null_pct < 0.50]
+    small = next((d for d in clean_cats if 2 <= d.cardinality <= 6 and (not ranked or d.field != ranked[0].field)), None)
+    if not small:
+        small = next((d for d in cats if 2 <= d.cardinality <= 6 and (not ranked or d.field != ranked[0].field)), None)
     if small:
         add("share", "donut", f"{primary} Share by {small.label.title()}", [primary], small, "desc")
     geo = next((d for d in geos if re.search(r"city|state|country|region|district|province", d.label, re.I)), None)
@@ -247,11 +252,26 @@ def _slicers(dims: list[DimensionOption]) -> list[PlanVisual]:
 
 
 def _insights_box(insights: InsightPlan | None) -> PlanVisual:
-    chosen: list[Insight] = []
-    if insights:
-        chosen = [i for i in insights.insights if i.pinned][:3] or insights.insights[:3]
-    return PlanVisual(id="", role="insights", type="text_box", title="Key Insights", text=[i.headline for i in chosen],
-                      purpose="Plain-language findings pinned in AI Insights.")
+    chosen_lines: list[str] = []
+    if insights and insights.insights:
+        candidates = [i for i in insights.insights if i.pinned] + [i for i in insights.insights if not i.pinned]
+        seen_norms: set[str] = set()
+        for ins in candidates:
+            hl = ins.headline.strip()
+            # Normalize to catch slight wording variations like "for Dec 2025 is" vs "was ... in Dec 2025"
+            norm = re.sub(r"\b(was|is|for|in|to date|versus)\b", "", hl.lower())
+            norm = re.sub(r"\s+", " ", norm).strip()
+            if hl in chosen_lines or norm in seen_norms:
+                continue
+            seen_norms.add(norm)
+            chosen_lines.append(hl)
+            if len(chosen_lines) >= 3:
+                break
+    return PlanVisual(
+        id="", role="insights", type="text_box", title="Key Insights",
+        text=chosen_lines[:3],
+        purpose="Plain-language findings pinned in AI Insights.",
+    )
 
 
 # --- layout ---------------------------------------------------------------------------
