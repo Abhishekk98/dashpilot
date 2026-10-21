@@ -203,8 +203,10 @@ def _tokens(theme: dict, palette_muted: str | None) -> dict[str, str]:
     label = theme.get("textClasses", {}).get("label", {}).get("color")
     grid = theme.get("visualStyles", {}).get("*", {}).get("*", {}).get("valueAxis", [{}])[0].get("gridlineColor", {}).get("solid", {}).get("color", "#E3E2E2")
     band = theme.get("visualStyles", {}).get("tableEx", {}).get("*", {}).get("values", [{}])[0].get("backColorSecondary", {}).get("solid", {}).get("color", card)
+    callout = theme.get("textClasses", {}).get("callout", {})
     return {"text": text, "card": card, "muted": palette_muted or label or text, "grid": grid, "band": band,
-            "accent": (theme.get("dataColors") or ["#F8CF4B"])[0]}
+            "accent": (theme.get("dataColors") or ["#F8CF4B"])[0],
+            "value": callout.get("color", text), "value_font": callout.get("fontFace", "Segoe UI")}
 
 
 def visual_json(v: PlanVisual, item: MappingItem, box: DetectedBox | None, order: int, tokens: dict[str, str]) -> dict:

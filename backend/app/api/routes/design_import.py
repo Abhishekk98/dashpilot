@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from app.api.deps import get_store
 from app.api.routes.projects import _load
 from core.design_import_service import (
-    ImportError_, ImportResponse, MappingEdit, get_import, import_upload, save_mapping, use_selected,
+    ImportError_, ImportResponse, MappingEdit, get_import, import_upload, save_mapping, set_override, use_selected,
 )
 from core.projects import ProjectStore
 from llm import LLMProvider, get_llm
@@ -15,6 +15,10 @@ router = APIRouter(prefix="/projects", tags=["design-import"])
 
 class MappingBody(BaseModel):
     mapping: list[MappingEdit]
+
+
+class OverrideBody(BaseModel):
+    override: bool
 
 
 def _run(fn, store: ProjectStore, project_id: str, llm, *args):
@@ -51,6 +55,19 @@ def update_mapping(project_id: str, body: MappingBody, store: ProjectStore = Dep
                    llm: LLMProvider | None = Depends(get_llm)) -> ImportResponse:
     """Reassign boxes or move/resize them; re-validates and re-renders the background."""
     return _run(save_mapping, store, project_id, llm, body.mapping)
+
+
+@router.put("/{project_id}/design/import/fidelity-override", response_model=ImportResponse)
+def fidelity_override(project_id: str, body: OverrideBody, store: ProjectStore = Depends(get_store),
+                      llm: LLMProvider | None = Depends(get_llm)) -> ImportResponse:
+    """Accept a design fidelity below the threshold so the PBIP can be built anyway (shown as a warning)."""
+    return _run(set_override, store, project_id, llm, body.override)
+
+
+@router.get("/{project_id}/design/original.png")
+def original(project_id: str, store: ProjectStore = Depends(get_store)) -> FileResponse:
+    """The design rendered as it is (before dummy contents are hidden), 1280x720."""
+    return _file(store, project_id, "original.png", "image/png")
 
 
 def _file(store: ProjectStore, project_id: str, name: str, media: str, download: str | None = None) -> FileResponse:

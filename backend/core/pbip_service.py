@@ -65,6 +65,18 @@ def _signature(store: ProjectStore, project: Project, llm: LLMProvider | None) -
     return hashlib.sha1(raw.encode()).hexdigest()[:16], imp
 
 
+def fidelity_blocked(imp) -> bool:
+    return imp.fidelity is not None and not imp.fidelity.passed and not imp.fidelity_override
+
+
+def fidelity_message(imp) -> str:
+    f = imp.fidelity
+    low = [c.title for c in f.cards if not c.passed][:3]
+    return (f"The page matches the design {f.overall:.1%} (needs {f.threshold:.0%})"
+            + (f"; cards below {f.card_threshold:.0%}: {', '.join(low)}" if low else "")
+            + ". Review the fidelity report in Step 8, or accept it there to build anyway.")
+
+
 def default_data_folder(project: Project) -> str:
     return f"C:\\DashPilot\\{folder_name(project.name)}\\Data\\"
 
@@ -83,6 +95,8 @@ def get_status(store: ProjectStore, project: Project, llm: LLMProvider | None) -
         sig, imp = _signature(store, project, llm)
         if not imp.valid:
             blockers.append("Finish the visual mapping in Step 8 (every visual needs one box, no overlaps).")
+        if fidelity_blocked(imp):
+            blockers.append(fidelity_message(imp))
     except ImportError_ as exc:
         blockers.append(str(exc))
     stored = store.read_json(project.id, BUILD_FILE)
@@ -99,6 +113,8 @@ def build_project(store: ProjectStore, project: Project, llm: LLMProvider | None
         raise BuildError(str(exc)) from None
     if not imp.valid:
         raise BuildError("Finish the visual mapping in Step 8 first: " + "; ".join(imp.issues[:2]))
+    if fidelity_blocked(imp):
+        raise BuildError(fidelity_message(imp))
     plan = _plan(store, project)
     model, results = build_with_results(store, project, llm)
     problems = tmdl.check(model)

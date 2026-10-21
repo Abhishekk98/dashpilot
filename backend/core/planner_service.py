@@ -33,7 +33,7 @@ class PlanError(ValueError):
 class DesignState(BaseModel):
     variants: list[DesignVariant] = []  # Option B variants (Option C keeps its own in design/option_c.json)
     selected: str | None = None
-    selected_method: Literal["B", "C"] | None = None
+    selected_method: Literal["A", "B", "C"] | None = None
     selected_label: str | None = None  # e.g. "Option C · Close to Reference" (Design Import shows it)
     plan_signature: str | None = None
     stale: bool = False  # the plan changed after these variants were generated
@@ -61,6 +61,8 @@ def _design(store: ProjectStore, project: Project, plan: DashboardPlan) -> Desig
     state.stale = bool(state.variants) and state.plan_signature != plan_signature(plan)
     if state.selected and state.selected_method == "C":
         state.selected_stale = option_c.get_state(store, project).stale
+    elif state.selected and state.selected_method == "A":
+        state.selected_stale = False  # a Stitch design is re-matched to the plan by Design Import
     elif state.selected:
         state.selected_stale = state.stale
     return state
@@ -122,14 +124,23 @@ def generate_design(store: ProjectStore, project: Project, llm: LLMProvider | No
 
 
 def select_variant(store: ProjectStore, project: Project, llm: LLMProvider | None, variant_id: str) -> PlanResponse:
+    from core import stitch_import  # noqa: PLC0415 — stitch_import builds on design_import_service, which imports this module
+
     response = get_plan(store, project, llm)
     state = response.design
-    method = "C" if variant_id.startswith("reference_") else "B"
-    pool = option_c.get_state(store, project).variants if method == "C" else state.variants
-    chosen = next((v for v in pool if v.id == variant_id), None)
-    if chosen is None:
-        raise PlanError(f"Unknown design variant {variant_id}; generate the variants first.")
-    state.selected, state.selected_method, state.selected_label = variant_id, method, f"Option {method} · {chosen.label}"
+    if variant_id == stitch_import.VARIANT_ID:  # Option A: the uploaded Google Stitch export
+        upload, html = stitch_import.get_upload(store, project), stitch_import.stitch_html(store, project)
+        if upload is None or html is None:
+            raise PlanError("Upload the Stitch export first.")
+        chosen = DesignVariant(id=variant_id, label=upload.label, html=html, source="template")
+        state.selected, state.selected_method, state.selected_label = variant_id, "A", upload.label
+    else:
+        method = "C" if variant_id.startswith("reference_") else "B"
+        pool = option_c.get_state(store, project).variants if method == "C" else state.variants
+        chosen = next((v for v in pool if v.id == variant_id), None)
+        if chosen is None:
+            raise PlanError(f"Unknown design variant {variant_id}; generate the variants first.")
+        state.selected, state.selected_method, state.selected_label = variant_id, method, f"Option {method} · {chosen.label}"
     store.write_json(project.id, DESIGN_FILE, state.model_dump(mode="json", exclude={"stale", "selected_stale"}))
     state = _design(store, project, response.plan)
     # The chosen page is what Design Import (Step 8) reads.

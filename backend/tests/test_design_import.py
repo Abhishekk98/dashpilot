@@ -119,12 +119,23 @@ def test_stitch_like_design_maps_by_title_and_hides_values(shop):
     assert dark(after) > 500 and dark(no_titles) < dark(after) / 2
 
 
-def test_page_taller_than_canvas_ignores_containers_below(shop):
+def test_page_taller_than_canvas_is_scaled_into_it(shop):
     plan, _, _ = shop
     page = stitch_page(plan, offset=0).replace("</div></body>", '<div class="card" style="position:absolute;left:24px;top:900px;width:300px;height:200px"><p class="t">Footer card</p></div></div></body>')
     page = page.replace("height:720px", "height:1200px")
     found = extract(page)
-    assert found.skipped == 1 and all(b.y + b.h <= 720 for b in found.boxes)
+    # The whole 1280x1200 page is fitted into 1280x720 (scale 0.6, centered); nothing is cut off.
+    assert (found.source_w, found.source_h, found.scale) == (1280, 1200, 0.6) and found.skipped == 0
+    assert any(b.title == "Footer card" for b in found.boxes)
+    assert all(0 <= b.x and b.x + b.w <= 1280 and 0 <= b.y and b.y + b.h <= 720 for b in found.boxes)
+
+
+def test_stitch_page_with_padding_around_a_1280x720_dashboard_is_not_scaled(shop):
+    plan, _, _ = shop
+    inner = stitch_page(plan).replace('<div class="page">', '<div class="page" style="margin:40px auto">')
+    found = extract(inner.replace("body {", "body { padding: 32px; background:#999;"))
+    assert found.scale == 1.0 and len(found.boxes) >= len(plan.visuals)
+    assert next(c for c in found.palette if c.role == "canvas").hex == "#F4F1EA"
 
 
 def test_ai_fallback_maps_reworded_titles(shop):

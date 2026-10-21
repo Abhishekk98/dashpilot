@@ -11,6 +11,8 @@ const H = 720;
 interface Props {
   view: "background" | "original";
   backgroundUrl: string;
+  /** The design rendered as-is (newer imports); Stitch pages need their scripts, which an iframe preview cannot run. */
+  originalUrl?: string | null;
   html: string;
   visuals: PlanVisual[];
   mapping: MappingEdit[];
@@ -25,7 +27,7 @@ interface Props {
 
 /** The 1280x720 design with numbered mapping boxes; boxes can be dragged and resized,
  *  and free detected slots can be clicked to assign them to the selected visual. */
-export function MappingCanvas({ view, backgroundUrl, html, visuals, mapping, boxes, showBoxes, selected, problems, onSelect, onAssignBox, onMove }: Props) {
+export function MappingCanvas({ view, backgroundUrl, originalUrl, html, visuals, mapping, boxes, showBoxes, selected, problems, onSelect, onAssignBox, onMove }: Props) {
   const canvasRef = useRef<HTMLDivElement>(null);
   const used = new Set(mapping.map((m) => m.box_id).filter(Boolean));
   const titles = new Map(visuals.map((v, i) => [v.id, { n: String(i + 1).padStart(2, "0"), title: v.title }]));
@@ -60,7 +62,10 @@ export function MappingCanvas({ view, backgroundUrl, html, visuals, mapping, box
   return (
     <ScaledCanvas className="rounded-2xl shadow-inner bg-surface-container-low">
       <div ref={canvasRef} className="relative w-[1280px] h-[720px] select-none">
-        {view === "background" ? (
+        {view === "original" && originalUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element -- generated per project, versioned URL
+          <img src={originalUrl} alt="Original design" width={W} height={H} className="absolute inset-0 w-full h-full" draggable={false} />
+        ) : view === "background" ? (
           // eslint-disable-next-line @next/next/no-img-element -- generated per project, versioned URL
           <img src={backgroundUrl} alt="Clean design background" width={W} height={H} className="absolute inset-0 w-full h-full" draggable={false} />
         ) : (

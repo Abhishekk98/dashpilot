@@ -457,7 +457,7 @@ export interface DesignState {
   /** Option B variants (Option C keeps its own, see ReferenceState). */
   variants: DesignVariant[];
   selected: string | null;
-  selected_method: "B" | "C" | null;
+  selected_method: "A" | "B" | "C" | null;
   /** e.g. "Option C · Close to Reference". */
   selected_label: string | null;
   plan_signature: string | null;
@@ -546,8 +546,34 @@ export interface ThemeColor {
   weight: number;
 }
 
+export interface CardFidelity {
+  box_id: string;
+  visual_id: string | null;
+  title: string;
+  score: number;
+  passed: boolean;
+}
+
+/** How closely the Power BI page (background + visual areas) matches the design. */
+export interface FidelityReport {
+  overall: number;
+  passed: boolean;
+  threshold: number;
+  card_threshold: number;
+  /** "screenshot" = compared with the design tool's own screen.png; "render" = with our render of its HTML. */
+  reference: "screenshot" | "render";
+  render_match: number | null;
+  cards: CardFidelity[];
+  notes: string[];
+}
+
 export interface DesignImport {
-  source: "option_b" | "option_c" | "upload";
+  source: "option_a" | "option_b" | "option_c" | "upload";
+  source_w: number;
+  source_h: number;
+  scale: number;
+  fidelity: FidelityReport | null;
+  fidelity_override: boolean;
   source_name: string;
   source_hash: string;
   plan_signature: string;
@@ -608,6 +634,22 @@ export interface BuildStatus {
   build: BuildResult | null;
   /** The plan, mapping or design changed after the last build. */
   stale: boolean;
+}
+
+export type StitchStyle = "dark_futuristic" | "light_elegant" | "glassmorphism" | "minimal_corporate" | "neon_tech";
+
+export interface StitchPrompt {
+  style: StitchStyle;
+  styles: { id: StitchStyle; label: string }[];
+  prompt: string;
+  visuals: number;
+}
+
+export interface StitchState {
+  upload: { filename: string; has_screen: boolean; files: string[]; uploaded_at: string; label: string } | null;
+  /** The import of the uploaded export: mapping, background and fidelity report. */
+  design: DesignImport | null;
+  notes: string[];
 }
 
 export class ApiError extends Error {}
@@ -865,6 +907,34 @@ export function saveDesignMapping(id: string, mapping: MappingEdit[]): Promise<I
 
 export function designBackgroundUrl(id: string, version: string): string {
   return `${API_BASE_URL}/api/projects/${id}/design/background.png?v=${encodeURIComponent(version)}`;
+}
+
+/** The design rendered as-is (before dummy contents are hidden). */
+export function designOriginalUrl(id: string, version: string): string {
+  return `${API_BASE_URL}/api/projects/${id}/design/original.png?v=${encodeURIComponent(version)}`;
+}
+
+export function setFidelityOverride(id: string, override: boolean): Promise<ImportResponse> {
+  return request(`/api/projects/${id}/design/import/fidelity-override`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ override }),
+  });
+}
+
+export function getStitchPrompt(id: string, style: StitchStyle): Promise<StitchPrompt> {
+  return request(`/api/projects/${id}/design/stitch/prompt?style=${style}`);
+}
+
+export function getStitchState(id: string): Promise<StitchState> {
+  return request(`/api/projects/${id}/design/stitch`);
+}
+
+/** Upload Stitch's code.html or export zip (HTML + screen.png); it is imported right away. */
+export function uploadStitch(id: string, file: File): Promise<StitchState> {
+  const form = new FormData();
+  form.append("file", file);
+  return request(`/api/projects/${id}/design/stitch`, { method: "POST", body: form });
 }
 
 export function designThemeUrl(id: string): string {

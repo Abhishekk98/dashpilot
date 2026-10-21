@@ -16,6 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from typing import Any, TypeVar
+from urllib.parse import urlparse
 
 from core.planner import CANVAS_H, CANVAS_W, DashboardPlan
 
@@ -131,18 +132,27 @@ def playwright_available() -> bool:
 
 
 SCRIPT_HOSTS = ("cdn.tailwindcss.com",)  # Stitch exports style themselves with the Tailwind CDN
+STITCH_IMAGE_HOSTS = ("googleusercontent.com",)  # Stitch hot-links its generated images (logo, avatars)
+
+
+def _host_allowed(url: str, hosts: tuple[str, ...]) -> bool:
+    if url.startswith(("data:", "about:", "blob:")):
+        return True
+    host = (urlparse(url).hostname or "").lower()
+    return any(host == h or host.endswith("." + h) for h in hosts)
 
 
 def render_page(html: str, work: Callable[[Any], T], allow_scripts: bool = False) -> T:
     """Open `html` at 1280x720 in a headless installed browser (Edge, then Chrome, then Playwright's
-    Chromium) and return `work(page)`. Network is limited to the font hosts (and, with allow_scripts,
-    the Tailwind CDN that Stitch exports need); everything else is blocked, so page scripts cannot
-    reach anything. Without allow_scripts, scripts are stripped and never run."""
+    Chromium) and return `work(page)`. Network is limited to GET requests to the font hosts (and,
+    with allow_scripts — Google Stitch exports — the Tailwind CDN and Stitch's image host);
+    everything else is blocked, so page scripts cannot reach anything. Without allow_scripts,
+    scripts are stripped and never run."""
     from playwright.sync_api import sync_playwright
 
     if not allow_scripts:
         html = re.sub(r"<script\b.*?</script>", "", html, flags=re.S | re.I)
-    hosts = ALLOWED_HOSTS + (SCRIPT_HOSTS if allow_scripts else ())
+    hosts = ALLOWED_HOSTS + (SCRIPT_HOSTS + STITCH_IMAGE_HOSTS if allow_scripts else ())
     with sync_playwright() as p:
         browser = None
         for channel in ("msedge", "chrome", None):
@@ -155,8 +165,16 @@ def render_page(html: str, work: Callable[[Any], T], allow_scripts: bool = False
             raise RuntimeError("No browser available for Playwright")
         try:
             page = browser.new_page(viewport={"width": CANVAS_W, "height": CANVAS_H}, java_script_enabled=True)
-            page.route("**/*", lambda route: route.continue_() if route.request.url.startswith(("data:", "about:")) or any(h in route.request.url for h in hosts) else route.abort())
-            page.set_content(html, wait_until="load", timeout=20000)
+            page.route("**/*", lambda route: route.continue_() if route.request.method == "GET" and _host_allowed(route.request.url, hosts) else route.abort())
+            page.set_content(html, wait_until="load", timeout=30000)
+            if allow_scripts:
+                # The Tailwind CDN builds its CSS after load; web fonts and images settle a moment later.
+                try:
+                    page.wait_for_load_state("networkidle", timeout=10000)
+                except Exception:
+                    pass
+                page.evaluate("() => document.fonts ? document.fonts.ready.then(() => true) : true")
+                page.wait_for_timeout(400)
             return work(page)
         finally:
             browser.close()

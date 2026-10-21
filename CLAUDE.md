@@ -46,7 +46,9 @@ backend/
                            #   render_page/measure + contract checks), design_import(_service) (Step 8:
                            #   boxes, mapping, background.png, theme.json in storage/{id}/design/);
                            #   style_profile + design_option_c (method C: reference image → style
-                           #   profile → 2 variants via design_ai.generate_styled; selected.html as for B)
+                           #   profile → 2 variants via design_ai.generate_styled; selected.html as for B),
+                           #   stitch_prompt + stitch_import (method A: prompt, safe export zip/html upload into
+                           #   the shared import), design_fidelity (background vs Stitch screen.png, build gate)
   llm/                     # base.py (LLMProvider interface, errors, retry), gemini.py, claude.py,
                            # factory.py (picks provider from LLM_PROVIDER), prompts/
   templates/               # visuals/ (one PBIR template per visual type), pbir_schemas/ (Microsoft's PBIP/PBIR

@@ -7,8 +7,8 @@
   "max_measures": 1,
   "objects": {
     "labels": {
-      "color": "{{text}}",
-      "fontFamily": "Segoe UI",
+      "color": "{{value}}",
+      "fontFamily": "{{value_font}}",
       "fontSize": 24
     },
     "categoryLabels": {

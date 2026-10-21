@@ -90,6 +90,15 @@ class Extraction(BaseModel):
     heading_font: str
     body_font: str
     skipped: int = 0  # containers outside the 1280x720 canvas
+    # The design's own size; a page that is not 1280x720 is scaled into the canvas (`scale` < 1).
+    source_w: int = CANVAS_W
+    source_h: int = CANVAS_H
+    scale: float = 1.0
+    # How the design draws charts and numbers (placeholder charts in Stitch exports) -> Power BI theme.
+    chart_colors: list[str] = []
+    label_color: str | None = None
+    value_color: str | None = None
+    value_font: str | None = None
 
 
 # --- colors -----------------------------------------------------------------------------------
@@ -166,6 +175,34 @@ def _merge(weights: dict[str, float]) -> list[tuple[str, float]]:
 
 # --- extraction (browser) -----------------------------------------------------------------------
 
+# Pages without a [data-canvas] (Stitch exports): find the dashboard — an element of about 1280x720,
+# else the whole page — and, when it is not 1280x720, scale it into the canvas (centered, letterboxed
+# with the page background). The <html> element then is the 1280x720 canvas.
+_FIT = r"""
+() => {
+  if (document.querySelector('[data-canvas]')) return {scaled: false, scale: 1, w: 1280, h: 720};
+  const de = document.documentElement, body = document.body;
+  window.scrollTo(0, 0);
+  const W = Math.max(de.scrollWidth, body.scrollWidth, 1), H = Math.max(de.scrollHeight, body.scrollHeight, 1);
+  let target = null;
+  for (const el of body.querySelectorAll('*')) {
+    const r = el.getBoundingClientRect();
+    if (Math.abs(r.width - 1280) <= 8 && Math.abs(r.height - 720) <= 8) { target = r; break; }
+  }
+  const t = target ? {x: target.left, y: target.top, w: target.width, h: target.height} : {x: 0, y: 0, w: W, h: H};
+  const s = Math.min(1280 / t.w, 720 / t.h, 1);
+  const dx = (1280 - t.w * s) / 2 - t.x * s, dy = (720 - t.h * s) / 2 - t.y * s;
+  if (Math.abs(s - 1) > 0.002 || Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
+    body.style.transformOrigin = '0 0';
+    body.style.transform = `translate(${dx}px, ${dy}px) scale(${s})`;
+    body.style.width = W + 'px';
+  }
+  de.style.width = '1280px'; de.style.height = '720px'; de.style.overflow = 'hidden';
+  de.setAttribute('data-canvas', '');
+  return {scaled: Math.abs(s - 1) > 0.002, scale: s, w: Math.round(t.w), h: Math.round(t.h)};
+}
+"""
+
 _DETECT = r"""
 (mark) => {
   const canvas = document.querySelector('[data-canvas]') || document.body;
@@ -216,23 +253,73 @@ _DETECT = r"""
   }
 
   // Where the Power BI visual goes inside the card: the chart area when the HTML marks one,
-  // otherwise below the title (or right of it for short pill-shaped cards like slicers).
+  // otherwise everything the card draws outside its title row (fake charts, KPI values, slicer
+  // text), so the visual covers all dummy content and static labels beside the title stay.
+  const draws = d => {
+    const tag = d.tagName.toLowerCase(), cs = getComputedStyle(d);
+    return own(d) || ['svg', 'canvas', 'img'].includes(tag) || alpha(cs.backgroundColor) > 0.04 || cs.backgroundImage !== 'none'
+      || (parseFloat(cs.borderTopWidth) > 0 && alpha(cs.borderTopColor) > 0.04) || (d instanceof SVGElement && tag !== 'svg');
+  };
   const contentArea = (el, titleEl) => {
     const areaEl = el.querySelector('[data-chart-area]');
     if (areaEl) return rel(areaEl);
     if (!titleEl) return null;
     const b = rel(el), t = rel(titleEl);
-    let a = null;
-    if (b.h <= 64 && t.x + t.w < b.x + b.w * 0.7) a = {x: t.x + t.w + 6, y: b.y + 4, w: b.x + b.w - (t.x + t.w + 6) - 6, h: b.h - 8};
-    else if (t.y + t.h < b.y + b.h * 0.6) a = {x: b.x + 8, y: t.y + t.h + 6, w: b.w - 16, h: b.y + b.h - (t.y + t.h + 6) - 8};
-    return a && a.w >= 20 && a.h >= 16 ? a : null;
+    if (b.h <= 64 && t.x + t.w < b.x + b.w * 0.7) {  // pill (slicer): content right of the label
+      const a = {x: t.x + t.w + 6, y: b.y + 3, w: b.x + b.w - (t.x + t.w + 6) - 4, h: b.h - 6};
+      return a.w >= 20 && a.h >= 16 ? a : null;
+    }
+    const below = t.y + t.h / 2 < b.y + b.h / 2;  // title in the top half: content under it
+    const pad = 6;
+    let a = below ? {x1: b.x + pad, y1: t.y + t.h + 4, x2: b.x + b.w - pad, y2: b.y + b.h - pad}
+                  : {x1: b.x + pad, y1: b.y + pad, x2: b.x + b.w - pad, y2: t.y - 4};
+    for (const d of el.querySelectorAll('*')) {
+      if (d === titleEl || d.contains(titleEl) || titleEl.contains(d) || !shown(d) || !draws(d)) continue;
+      const r = rel(d);
+      if (r.w < 1 || r.h < 1) continue;
+      const cy = r.y + r.h / 2;
+      if (cy >= t.y - 2 && cy <= t.y + t.h + 2) continue;  // same row as the title: a static label
+      if (below ? cy < t.y : cy > t.y + t.h) continue;
+      a = {x1: Math.min(a.x1, r.x), y1: below ? a.y1 : Math.min(a.y1, r.y), x2: Math.max(a.x2, r.x + r.w), y2: below ? Math.max(a.y2, r.y + r.h) : a.y2};
+    }
+    a = {x: Math.max(b.x, a.x1), y: Math.max(b.y, a.y1), w: Math.min(b.x + b.w, a.x2) - Math.max(b.x, a.x1), h: Math.min(b.y + b.h, a.y2) - Math.max(b.y, a.y1)};
+    return a.w >= 20 && a.h >= 16 ? a : null;
   };
+
+  // Chart look of the design (Stitch draws placeholder charts): series colors, label and value styles.
+  const chart = {colors: {}, labels: {}, values: []};
+  const collect = (el, area) => {
+    if (!area) return;
+    for (const d of el.querySelectorAll('*')) {
+      if (!shown(d)) continue;
+      const r = rel(d);
+      const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+      if (cx < area.x || cx > area.x + area.w || cy < area.y || cy > area.y + area.h) continue;
+      const cs = getComputedStyle(d), weight = Math.max(1, Math.min(r.w * r.h, 4000));
+      if (d instanceof SVGElement) {
+        // Only drawn shapes count (the <svg>/<g> containers report an inherited default fill).
+        if (!['path', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon'].includes(d.tagName.toLowerCase())) continue;
+        const fill = d.getAttribute('fill') === 'none' ? null : cs.fill, stroke = cs.strokeWidth === '0px' ? null : cs.stroke;
+        for (const c of [fill, stroke]) if (c && c !== 'none' && alpha(c) > 0.3) add(chart.colors, c, weight);
+      } else if (alpha(cs.backgroundColor) > 0.3 && r.w * r.h < area.w * area.h * 0.6) add(chart.colors, cs.backgroundColor, weight);
+      const t = own(d);
+      if (t) {
+        const size = parseFloat(cs.fontSize);
+        if (/[0-9]/.test(t)) chart.values.push({size, color: cs.color, font: cs.fontFamily, weight: cs.fontWeight});
+        if (size <= 12 && t.length <= 14) add(chart.labels, cs.color, 1);  // axis-style labels (counted, not prose)
+      }
+    }
+  };
+  const add = (map, k, w) => { if (k) map[k] = (map[k] || 0) + w; };
 
   const boxes = found.map(({el, titleEl}) => {
     const cs = getComputedStyle(el);
     const ts = titleEl ? getComputedStyle(titleEl) : cs;
+    const area = contentArea(el, titleEl);
+    collect(el, area);
+    if (mark && area) el.setAttribute('data-dp-area', JSON.stringify({x: area.x + o.left, y: area.y + o.top, w: area.w, h: area.h}));
     return {
-      area: contentArea(el, titleEl),
+      area,
       ...rel(el),
       title: el.getAttribute('data-title') || (titleEl ? own(titleEl) : ''),
       text: (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 300),
@@ -251,7 +338,6 @@ _DETECT = r"""
 
   // Palette: backgrounds weighted by visible area, text colors by amount of text.
   const bg = {}, fg = {}, fonts = {}, titleFonts = {};
-  const add = (map, k, w) => { if (k) map[k] = (map[k] || 0) + w; };
   let n = 0;
   for (const el of [canvas, ...canvas.querySelectorAll('*')]) {
     if (++n > 4000) break;
@@ -268,9 +354,16 @@ _DETECT = r"""
     if (t) { add(fg, cs.color, t.length * parseFloat(cs.fontSize)); add(fonts, cs.fontFamily, t.length); }
   }
   for (const b of boxes) add(titleFonts, b.title_font, 1);
-  let page = canvas, canvasBg = null;
-  while (page && !canvasBg) { const c = getComputedStyle(page).backgroundColor; if (alpha(c) > 0.5) canvasBg = c; page = page.parentElement; }
-  return {w: o.width, h: o.height, boxes, bg, fg, fonts, titleFonts, canvasBg: canvasBg || 'rgb(255, 255, 255)'};
+  // Canvas color: what is painted at the canvas edges (scaled Stitch pages put the page there).
+  const paint = (x, y) => {
+    let e = document.elementFromPoint(o.left + x, o.top + y);
+    while (e) { const c = getComputedStyle(e).backgroundColor; if (alpha(c) > 0.5) return c; e = e.parentElement; }
+    const c = getComputedStyle(document.body).backgroundColor;
+    return alpha(c) > 0.5 ? c : null;
+  };
+  const edges = [[4, 4], [o.width - 4, 4], [4, o.height - 4], [o.width - 4, o.height - 4], [o.width / 2, 4]].map(([x, y]) => paint(x, y)).filter(Boolean);
+  const canvasBg = edges.sort((a, b) => edges.filter(c => c === b).length - edges.filter(c => c === a).length)[0];
+  return {w: o.width, h: o.height, boxes, bg, fg, fonts, titleFonts, chart, canvasBg: canvasBg || 'rgb(255, 255, 255)'};
 }
 """
 
@@ -288,8 +381,15 @@ def _first_family(stack: str) -> str:
     return (stack or "").split(",")[0].strip().strip("'\"") or "Segoe UI"
 
 
+def _detect(page, mark: bool) -> dict:
+    fit = page.evaluate(_FIT)
+    data = page.evaluate(_DETECT, mark)
+    data["fit"] = fit
+    return data
+
+
 def extract(html: str, allow_scripts: bool = False) -> Extraction:
-    data = render_page(html, lambda page: page.evaluate(_DETECT, False), allow_scripts)
+    data = render_page(html, lambda page: _detect(page, False), allow_scripts)
     boxes, skipped = [], 0
     for b in data["boxes"]:
         x, y, w, h = (round(b[k]) for k in ("x", "y", "w", "h"))
@@ -303,11 +403,29 @@ def extract(html: str, allow_scripts: bool = False) -> Extraction:
             title_font=_first_family(b["title_font"]), title_color=css_hex(b["title_color"]),
             inset=_inset(b, b.get("area")),
         ))
+    palette = _palette(data, boxes)
+    chart = data.get("chart") or {}
+    card = next((c.hex for c in palette if c.role == "card"), "#FFFFFF")
+    def hexes(weights: dict[str, float]) -> dict[str, float]:
+        out: dict[str, float] = {}
+        for c, w in weights.items():
+            h = css_hex(c)
+            if h:
+                out[h] = out.get(h, 0) + w
+        return out
+
+    series = [c for c, _ in _merge(hexes(chart.get("colors", {}))) if contrast(c, card) >= 1.15]
+    labels = _merge(hexes(chart.get("labels", {})))
+    values = sorted(chart.get("values", []), key=lambda v: -v["size"])
+    fit = data.get("fit") or {}
     return Extraction(
-        canvas_w=data["w"], canvas_h=data["h"], boxes=boxes, skipped=skipped,
-        palette=_palette(data, boxes),
+        canvas_w=data["w"], canvas_h=data["h"], boxes=boxes, skipped=skipped, palette=palette,
         heading_font=_first_family(max(data["titleFonts"], key=data["titleFonts"].get)) if data["titleFonts"] else "Segoe UI",
         body_font=_first_family(max(data["fonts"], key=data["fonts"].get)) if data["fonts"] else "Segoe UI",
+        source_w=fit.get("w", CANVAS_W), source_h=fit.get("h", CANVAS_H), scale=round(fit.get("scale", 1.0), 4),
+        chart_colors=series[:8], label_color=labels[0][0] if labels else None,
+        value_color=css_hex(values[0]["color"]) if values else None,
+        value_font=_first_family(values[0]["font"]) if values else None,
     )
 
 
@@ -478,26 +596,50 @@ def title_kept(visual_title: str, box: DetectedBox | None) -> bool:
     return box is not None and title_score(visual_title, box) >= TITLE_THRESHOLD
 
 
-def background_png(html: str, hide_box_ids: list[str], allow_scripts: bool = False, hide_titles: list[str] | None = None) -> bytes:
-    """Canvas screenshot with the mapped cards' contents hidden (fake charts, KPI values, slicer
-    contents, insight text); card shapes, titles, header and logo stay. Power BI draws the rest.
-    Cards in `hide_titles` lose their title too (another visual sits there; Power BI titles it)."""
-    hide_titles = hide_titles or []
+# Contract cards (data-visual-id) hide everything but the title (CSS above). Other cards (Stitch
+# exports) hide only what lies in the content area Power BI will cover, so everything else in the
+# design — static labels beside a title, decorations, header, logo — stays pixel-identical.
+_HIDE_JS = """
+([ids, all, css]) => {
+  const style = document.createElement('style'); style.textContent = css; document.head.appendChild(style);
+  for (const id of ids) for (const el of document.querySelectorAll(`[data-dp-box="${id}"]`)) {
+    const area = el.getAttribute('data-dp-area');
+    if (all.includes(id)) { el.setAttribute('data-dp-hide-all', ''); continue; }
+    if (el.hasAttribute('data-visual-id') || !area) { el.setAttribute('data-dp-hide', ''); continue; }
+    const a = JSON.parse(area), title = el.querySelector('[data-dp-title]');
+    for (const d of el.querySelectorAll('*')) {
+      if (title && (d === title || d.contains(title) || title.contains(d))) continue;
+      const r = d.getBoundingClientRect();
+      const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      if (cx >= a.x && cx <= a.x + a.w && cy >= a.y && cy <= a.y + a.h) d.style.setProperty('visibility', 'hidden', 'important');
+    }
+  }
+}
+"""
 
-    def shoot(page) -> bytes:
-        page.evaluate(_DETECT, True)
-        page.evaluate(
-            """([ids, all, css]) => {
-                for (const id of ids) document.querySelectorAll(`[data-dp-box="${id}"]`).forEach(el =>
-                    el.setAttribute(all.includes(id) ? 'data-dp-hide-all' : 'data-dp-hide', ''));
-                const s = document.createElement('style'); s.textContent = css; document.head.appendChild(s);
-            }""",
-            [hide_box_ids, hide_titles, _HIDE_CSS],
-        )
-        r = page.evaluate("() => { const c = document.querySelector('[data-canvas]') || document.body; const r = c.getBoundingClientRect(); return {x: r.left, y: r.top}; }")
-        return page.screenshot(clip={"x": max(0, r["x"]), "y": max(0, r["y"]), "width": CANVAS_W, "height": CANVAS_H}, full_page=True)
+
+def _clip(page) -> bytes:
+    r = page.evaluate("() => { const c = document.querySelector('[data-canvas]') || document.body; const r = c.getBoundingClientRect(); return {x: r.left, y: r.top}; }")
+    return page.screenshot(clip={"x": max(0, r["x"]), "y": max(0, r["y"]), "width": CANVAS_W, "height": CANVAS_H}, full_page=True)
+
+
+def render_design(html: str, hide_box_ids: list[str], allow_scripts: bool = False, hide_titles: list[str] | None = None) -> tuple[bytes, bytes]:
+    """(original render, clean background) of the 1280x720 canvas in one browser session.
+    The background hides the mapped cards' dummy contents (fake charts, KPI values, slicer contents,
+    insight text) and keeps card shapes, titles, header and logo; Power BI draws the rest.
+    Cards in `hide_titles` lose their title too (another visual sits there; Power BI titles it)."""
+
+    def shoot(page) -> tuple[bytes, bytes]:
+        _detect(page, True)
+        original = _clip(page)
+        page.evaluate(_HIDE_JS, [hide_box_ids, hide_titles or [], _HIDE_CSS])
+        return original, _clip(page)
 
     return render_page(html, shoot, allow_scripts)
+
+
+def background_png(html: str, hide_box_ids: list[str], allow_scripts: bool = False, hide_titles: list[str] | None = None) -> bytes:
+    return render_design(html, hide_box_ids, allow_scripts, hide_titles)[1]
 
 
 # --- Power BI theme ----------------------------------------------------------------------------
@@ -506,31 +648,44 @@ def _role(palette: list[ThemeColor], role: str, default: str) -> str:
     return next((c.hex for c in palette if c.role == role), default)
 
 
-def data_colors(palette: list[ThemeColor], brand: BrandPalette, background: str, n: int = 8) -> list[str]:
-    """Series colors: the design's accent, brand colors, other vivid design colors, then hue steps;
-    each must stand out from the canvas and from the colors before it."""
+def data_colors(palette: list[ThemeColor], brand: BrandPalette, background: str, n: int = 8, chart: list[str] | None = None) -> list[str]:
+    """Series colors: the colors the design's own charts use (Stitch placeholders), the design's
+    accent, brand colors, other vivid design colors, then hue steps; each must stand out from the
+    canvas and from the colors before it."""
     accent = _role(palette, "accent", brand.accent)
-    candidates = [accent, css_hex(brand.accent), css_hex(brand.growth)]
+    candidates = list(chart or []) + [accent, css_hex(brand.accent), css_hex(brand.growth)]
     candidates += [c.hex for c in palette if c.role == "other"]
     candidates += [css_hex(brand.muted), css_hex(brand.base)]
     light_canvas = luminance(background) > 0.4
     for step in (150, 210, 40, 270, 100, 320, 180, 75, 240, 15):
         candidates.append(_rotate(accent, step, 0.42 if light_canvas else 0.62))
     out: list[str] = []
+    own = set(chart or [])
     for c in candidates:
-        if c and contrast(c, background) >= 1.6 and all(_distance(c, o) > 0.18 for o in out):
+        # The design's own chart colors are kept unless nearly invisible (the designer chose them).
+        if c and contrast(c, background) >= (1.15 if c in own else 1.6) and all(_distance(c, o) > 0.18 for o in out):
             out.append(c)
         if len(out) == n:
             break
     return out
 
 
-def build_theme(name: str, palette: list[ThemeColor], brand: BrandPalette) -> dict:
+PBI_FONTS = {"Segoe UI", "Segoe UI Semibold", "Segoe UI Light", "Arial", "Calibri", "Georgia", "Verdana", "Tahoma",
+             "Trebuchet MS", "Cambria", "Candara", "Corbel", "Consolas", "Courier New", "Times New Roman", "DIN"}
+
+
+def build_theme(name: str, palette: list[ThemeColor], brand: BrandPalette, found: Extraction | None = None) -> dict:
+    """Power BI theme from the design: canvas/card/text colors, the design's chart colors first in the
+    series colors, and its label and KPI value styles (fonts only when Power BI has them)."""
     canvas = _role(palette, "canvas", css_hex(brand.canvas) or "#FFFFFF")
     card = _role(palette, "card", canvas)
     text = _role(palette, "text", "#1B1C1C")
     muted = _role(palette, "muted", _mix(text, card, 0.4))
-    colors = data_colors(palette, brand, card)
+    if found and found.label_color and contrast(found.label_color, card) >= 2:
+        muted = found.label_color
+    value = found.value_color if found and found.value_color and contrast(found.value_color, card) >= 3 else text
+    value_font = found.value_font if found and found.value_font in PBI_FONTS else "Segoe UI"
+    colors = data_colors(palette, brand, card, chart=found.chart_colors if found else None)
     solid = lambda c: {"solid": {"color": c}}  # noqa: E731
     grid = _mix(card, text, 0.12)
     return {
@@ -544,7 +699,7 @@ def build_theme(name: str, palette: list[ThemeColor], brand: BrandPalette) -> di
         "bad": "#E5484D",
         "maximum": colors[0], "center": _mix(colors[0], card, 0.5), "minimum": card,
         "textClasses": {
-            "callout": {"fontSize": 26, "fontFace": "Segoe UI", "color": text},
+            "callout": {"fontSize": 26, "fontFace": value_font, "color": value},
             "title": {"fontSize": 12, "fontFace": "Segoe UI Semibold", "color": text},
             "header": {"fontSize": 12, "fontFace": "Segoe UI Semibold", "color": text},
             "label": {"fontSize": 10, "fontFace": "Segoe UI", "color": muted},
@@ -563,7 +718,7 @@ def build_theme(name: str, palette: list[ThemeColor], brand: BrandPalette) -> di
                 "labels": [{"color": solid(text), "fontFamily": "Segoe UI"}],
             }},
             "card": {"*": {
-                "labels": [{"color": solid(text), "fontFamily": "Segoe UI", "fontSize": 26}],
+                "labels": [{"color": solid(value), "fontFamily": value_font, "fontSize": 26}],
                 "categoryLabels": [{"show": False}],
             }},
             "slicer": {"*": {

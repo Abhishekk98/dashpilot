@@ -4,12 +4,14 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { FidelityReport } from "@/components/design/FidelityReport";
 import { StepHeader } from "@/components/layout/StepHeader";
 import { Icon } from "@/components/ui/Icon";
 import { PillButton } from "@/components/ui/PillButton";
 import { PlaceholderCard } from "@/components/ui/PlaceholderCard";
 import {
   designBackgroundUrl,
+  designOriginalUrl,
   designThemeUrl,
   getDesignImport,
   getProject,
@@ -18,6 +20,7 @@ import {
   type MappingEdit,
   type Project,
   saveDesignMapping,
+  setFidelityOverride,
   uploadDesignHtml,
 } from "@/lib/api";
 
@@ -90,7 +93,13 @@ export function ImportWorkspace() {
   }, [projectId, load]);
 
   const dirty = useMemo(() => !!data && JSON.stringify(mapping) !== JSON.stringify(toEdits(data)), [data, mapping]);
-  const problems = useMemo(() => (data ? localProblems(data, mapping) : new Set<string>()), [data, mapping]);
+  const problems = useMemo(() => {
+    const bad = data ? localProblems(data, mapping) : new Set<string>();
+    const f = data?.design.fidelity;
+    // Cards that do not reproduce the design closely enough are flagged too (until the user accepts them).
+    if (f && !f.passed && !data?.design.fidelity_override) f.cards.filter((c) => !c.passed && c.visual_id).forEach((c) => bad.add(c.visual_id as string));
+    return bad;
+  }, [data, mapping]);
 
   if (!projectId) {
     return (
@@ -158,7 +167,8 @@ export function ImportWorkspace() {
   const placedCount = mapping.filter((m) => m.w > 0 && m.h > 0).length;
   const total = data?.visuals.length ?? 0;
   const autoMatched = d ? d.mapping.filter((m) => m.method !== "none").length : 0;
-  const complete = !!d && d.valid && !dirty && problems.size === 0;
+  const fidelityOk = !d?.fidelity || d.fidelity.passed || d.fidelity_override;
+  const complete = !!d && d.valid && !dirty && fidelityOk && problems.size === 0;
 
   return (
     <div className="flex flex-col w-full">
@@ -217,7 +227,7 @@ export function ImportWorkspace() {
       <input
         ref={fileRef}
         type="file"
-        accept=".html,.htm,text/html"
+        accept=".html,.htm,.zip,text/html,application/zip"
         className="hidden"
         onChange={(e) => {
           const f = e.target.files?.[0];
@@ -244,7 +254,7 @@ export function ImportWorkspace() {
                 onClick={() => fileRef.current?.click()}
                 className="flex items-center gap-1.5 font-label-md text-label-md text-on-surface-variant hover:text-on-surface px-3 py-1.5 rounded-full bg-surface-container-lowest/80 disabled:opacity-50"
               >
-                <Icon name={busy === "upload" ? "sync" : "upload_file"} className={`text-[15px] ${busy === "upload" ? "animate-spin" : ""}`} /> Upload HTML
+                <Icon name={busy === "upload" ? "sync" : "upload_file"} className={`text-[15px] ${busy === "upload" ? "animate-spin" : ""}`} /> Upload HTML / Stitch zip
               </button>
               <button
                 type="button"
@@ -278,6 +288,7 @@ export function ImportWorkspace() {
                 <MappingCanvas
                   view={view}
                   backgroundUrl={designBackgroundUrl(projectId, d.background_version)}
+                  originalUrl={d.fidelity ? designOriginalUrl(projectId, d.background_version) : null}
                   html={data.html}
                   visuals={data.visuals}
                   mapping={mapping}
@@ -350,6 +361,15 @@ export function ImportWorkspace() {
                 {placedCount}/{total} placed
               </span>
             </div>
+
+            {d?.fidelity && (
+              <FidelityReport
+                report={d.fidelity}
+                override={d.fidelity_override}
+                busy={busy !== null}
+                onOverride={(v) => run("save", () => setFidelityOverride(projectId, v))}
+              />
+            )}
 
             {d && (dirty ? problems.size > 0 : d.issues.length > 0) && (
               <ul className="p-3 rounded-2xl bg-error-container/40 text-on-error-container flex flex-col gap-1">
