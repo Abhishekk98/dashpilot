@@ -701,7 +701,7 @@ def nav_button_json(page_num: int, target_num: int, target_page_name: str, label
         fill_color = accent
         outline_color = accent
     else:
-        font_color = muted  # fill is see-through below, so the design's own nav track shows
+        font_color = muted  # card-coloured fill: covers a design's own menu text (Stitch) under the button
         font_family = "Segoe UI"
         fill_color = card
         outline_color = grid
@@ -732,7 +732,7 @@ def nav_button_json(page_num: int, target_num: int, target_page_name: str, label
                 "fill": [{"properties": {
                     "show": literal(True),
                     "fillColor": color(fill_color),
-                    "transparency": literal(0 if is_active else 100),
+                    "transparency": literal(0),
                 }}],
                 "outline": [{"properties": {
                     "show": literal(True),
@@ -756,6 +756,25 @@ def nav_button_json(page_num: int, target_num: int, target_page_name: str, label
             },
         },
     }
+
+
+def design_nav_slots(pg: PageInput, labels: list[str]):
+    """Button slots on the design's own page menu: an unmapped box titled like one of the pages is
+    that page's item; the other pages continue below it (a side menu) or beside it (top tabs)."""
+    from core.planner import Box  # noqa: PLC0415
+
+    used = {m.box_id for m in pg.mapping if m.placed}
+    norm = lambda s: " ".join(re.sub(r"[^a-z0-9]+", " ", s.lower()).split())  # noqa: E731
+    wanted = {norm(lab): i for i, lab in enumerate(labels)}
+    anchor = next(((b, wanted[norm(b.title)]) for b in pg.boxes if b.id not in used and norm(b.title) in wanted and b.h <= 60), None)
+    if anchor is None:
+        return []
+    b, i = anchor
+    vertical = b.w <= 280 and b.x < 260
+    step_x, step_y = (0, b.h + 12) if vertical else (b.w + 8, 0)
+    slots = [Box(x=b.x + (t - i) * step_x, y=b.y + (t - i) * step_y, w=b.w, h=b.h) for t in range(len(labels))]
+    fits = all(s.x >= 0 and s.y >= 0 and s.x + s.w <= pg.plan.width and s.y + s.h <= pg.plan.height for s in slots)
+    return slots if fits else []
 
 
 def _is_sidebar_page(pg: PageInput) -> tuple[bool, int]:
@@ -832,12 +851,16 @@ def _report_files(inp: BuildInputs, root: str) -> dict[str, bytes]:
         for n in range(1, len(pages) + 1):
             curr_page_name = names[n - 1]
             pg = pages[n - 1]
-            is_sidebar, sidebar_w = _is_sidebar_page(pg)
-            # Same slots the DashPilot templates draw their nav track under (design_layouts.nav_slots).
-            slots = nav_slots(len(pages), sidebar_w if is_sidebar else 0)
+            labels = [p.plan.pages[0] if p.plan.pages else ("Overview" if t == 1 else f"Page {t}") for t, p in enumerate(pages, 1)]
+            # A design with its own page menu (a Stitch sidebar item named like a page) gets the buttons
+            # there; otherwise the slots the DashPilot templates draw their nav track under.
+            slots = design_nav_slots(pg, labels)
+            if not slots:
+                is_sidebar, sidebar_w = _is_sidebar_page(pg)
+                slots = nav_slots(len(pages), sidebar_w if is_sidebar else 0)
             for t, slot in enumerate(slots, 1):
                 target_page_name = names[t - 1]
-                label = pages[t - 1].plan.pages[0] if pages[t - 1].plan.pages else ("Overview" if t == 1 else f"Page {t}")
+                label = labels[t - 1]
                 btn_data = nav_button_json(
                     page_num=n, target_num=t, target_page_name=target_page_name,
                     label=label, x=slot.x, y=slot.y, w=slot.w, h=slot.h,
