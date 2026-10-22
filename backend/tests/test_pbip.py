@@ -126,7 +126,10 @@ def test_build_structure_and_validation(shop):
     assert second["displayName"] == "Details" and "DashPilotBackground_p2.png" in json.dumps(second)
     assert files[f"{root}.Report/StaticResources/RegisteredResources/DashPilotBackground_p2.png"] == shop.extra_pages[0].background
     p2 = [json.loads(c) for p, c in files.items() if f"/pages/{page_name(2)}/visuals/" in p]
-    assert len(p2) == len(shop.extra_pages[0].plan.visuals)
+    plan_p2 = [v for v in p2 if v["visual"]["visualType"] != "actionButton"]
+    assert len(plan_p2) == len(shop.extra_pages[0].plan.visuals)
+    nav_p2 = [v for v in p2 if v["visual"]["visualType"] == "actionButton"]
+    assert len(nav_p2) == 2
     synced = [v["visual"]["syncGroup"]["groupName"] for v in _visuals(files) if v["visual"]["visualType"] == "slicer"]
     assert len(synced) == 2 * len(set(synced))  # one group per slicer, on both pages
 
@@ -134,7 +137,10 @@ def test_build_structure_and_validation(shop):
 def test_visuals_follow_plan_and_mapping(shop):
     files = build(shop)
     visuals = {v["name"]: v for v in _visuals(files)}
-    assert len(visuals) == sum(len(pg.plan.visuals) for pg in shop.pages)
+    plan_visuals = {k: v for k, v in visuals.items() if v["visual"]["visualType"] != "actionButton"}
+    assert len(plan_visuals) == sum(len(pg.plan.visuals) for pg in shop.pages)
+    nav_visuals = {k: v for k, v in visuals.items() if v["visual"]["visualType"] == "actionButton"}
+    assert len(nav_visuals) == len(shop.pages) * len(shop.pages)
     by_plan = {v.id: v for v in shop.plan.visuals}
     for data in visuals.values():
         assert "active" not in json.dumps(data["visual"].get("query", {}))  # collapses tables in Power BI
@@ -339,7 +345,9 @@ def test_build_api_flow(api, sample_bytes, monkeypatch, tmp_path):
     b = res.json()["build"]
     whole = api.get(f"/api/projects/{pid}/plan").json()["plan"]
     slicers = sum(v["role"] == "slicer" for v in whole["visuals"])
-    assert b["valid"] and b["data_folder"] == "D:\\Reports\\Shop\\" and b["visuals"] == len(whole["visuals"]) + slicers * (len(whole["pages"]) - 1)
+    p_count = len(whole["pages"])
+    nav_buttons = p_count * p_count if p_count > 1 else 0
+    assert b["valid"] and b["data_folder"] == "D:\\Reports\\Shop\\" and b["visuals"] == len(whole["visuals"]) + slicers * (p_count - 1) + nav_buttons
     assert {c["status"] for c in b["checks"]} == {"pass"}
     z = api.get(f"/api/projects/{pid}/build/download")
     assert z.status_code == 200
@@ -367,6 +375,53 @@ def test_build_api_flow(api, sample_bytes, monkeypatch, tmp_path):
     visuals.pop(next(i for i, v in enumerate(visuals) if v["role"] == "chart"))
     api.put(f"/api/projects/{pid}/plan", json={"visuals": visuals})
     assert api.get(f"/api/projects/{pid}/build").json()["stale"]
+
+
+def test_multipage_navigation_buttons(shop):
+    # 1. Multi-page dashboard has 2 buttons on each page (4 total)
+    files = build(shop)
+    visuals = _visuals(files)
+    nav_buttons = [v for v in visuals if v["visual"]["visualType"] == "actionButton"]
+    assert len(nav_buttons) == 4
+
+    p1_name, p2_name = page_name(1), page_name(2)
+    p1_btns = [json.loads(c) for p, c in files.items() if f"/pages/{p1_name}/visuals/" in p and "visual.json" in p and json.loads(c)["visual"]["visualType"] == "actionButton"]
+    p2_btns = [json.loads(c) for p, c in files.items() if f"/pages/{p2_name}/visuals/" in p and "visual.json" in p and json.loads(c)["visual"]["visualType"] == "actionButton"]
+    assert len(p1_btns) == 2
+    assert len(p2_btns) == 2
+
+    # Check button texts
+    p1_texts = {b["visual"]["objects"]["text"][0]["properties"]["text"]["expr"]["Literal"]["Value"]: b for b in p1_btns}
+    assert "'Overview'" in p1_texts and "'Details'" in p1_texts
+
+    # On page 1: Overview is active (Segoe UI Semibold, accent color), Details is inactive (Segoe UI)
+    btn_ov1 = p1_texts["'Overview'"]
+    btn_det1 = p1_texts["'Details'"]
+    assert btn_ov1["visual"]["objects"]["text"][0]["properties"]["fontFamily"]["expr"]["Literal"]["Value"] == "'Segoe UI Semibold'"
+    assert btn_det1["visual"]["objects"]["text"][0]["properties"]["fontFamily"]["expr"]["Literal"]["Value"] == "'Segoe UI'"
+
+    # Check links
+    assert btn_ov1["visual"]["visualContainerObjects"]["visualLink"][0]["properties"]["type"]["expr"]["Literal"]["Value"] == "'PageNavigation'"
+    assert btn_ov1["visual"]["visualContainerObjects"]["visualLink"][0]["properties"]["navigationSection"]["expr"]["Literal"]["Value"] == f"'{p1_name}'"
+    assert btn_det1["visual"]["visualContainerObjects"]["visualLink"][0]["properties"]["navigationSection"]["expr"]["Literal"]["Value"] == f"'{p2_name}'"
+
+    # On page 2: Details is active, Overview is inactive
+    p2_texts = {b["visual"]["objects"]["text"][0]["properties"]["text"]["expr"]["Literal"]["Value"]: b for b in p2_btns}
+    btn_ov2 = p2_texts["'Overview'"]
+    btn_det2 = p2_texts["'Details'"]
+    assert btn_ov2["visual"]["objects"]["text"][0]["properties"]["fontFamily"]["expr"]["Literal"]["Value"] == "'Segoe UI'"
+    assert btn_det2["visual"]["objects"]["text"][0]["properties"]["fontFamily"]["expr"]["Literal"]["Value"] == "'Segoe UI Semibold'"
+
+    # 2. Single-page dashboard generates zero actionButtons
+    shop_single = shop.__class__(**{**shop.__dict__, "extra_pages": []})
+    single_files = build(shop_single)
+    single_navs = [v for v in _visuals(single_files) if v["visual"]["visualType"] == "actionButton"]
+    assert len(single_navs) == 0
+
+    # 3. PBIP validation passes with zero errors (schemas + layout)
+    checks = validate(files)
+    failures = [(c.id, c.issues) for c in checks if c.status == "fail"]
+    assert not failures, f"PBIP validation failed: {failures}"
 
 
 # --- fuzz ----------------------------------------------------------------------------------------------

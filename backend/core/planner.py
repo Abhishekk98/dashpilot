@@ -84,6 +84,7 @@ class DashboardPlan(BaseModel):
     width: int = CANVAS_W
     height: int = CANVAS_H
     pages: list[str] = Field(default_factory=lambda: PAGE_NAMES[:1])
+    total_pages: int = 1
     visuals: list[PlanVisual]
     source: Literal["rules", "ai"] = "rules"
     edited: bool = False
@@ -255,15 +256,14 @@ def _insights_box(insights: InsightPlan | None) -> PlanVisual:
     chosen_lines: list[str] = []
     if insights and insights.insights:
         candidates = [i for i in insights.insights if i.pinned] + [i for i in insights.insights if not i.pinned]
-        seen_norms: set[str] = set()
+        seen_words: list[frozenset[str]] = []
         for ins in candidates:
             hl = ins.headline.strip()
-            # Normalize to catch slight wording variations like "for Dec 2025 is" vs "was ... in Dec 2025"
-            norm = re.sub(r"\b(was|is|for|in|to date|versus)\b", "", hl.lower())
-            norm = re.sub(r"\s+", " ", norm).strip()
-            if hl in chosen_lines or norm in seen_norms:
+            norm = re.sub(r"\b(was|is|for|in|to date|versus|the|a|an)\b", "", hl.lower())
+            words = frozenset(re.findall(r"\b[a-z0-9$%+-]+\b", norm))
+            if not words or any(len(words & prev) / max(len(words | prev), 1) >= 0.75 for prev in seen_words):
                 continue
-            seen_norms.add(norm)
+            seen_words.append(words)
             chosen_lines.append(hl)
             if len(chosen_lines) >= 3:
                 break
@@ -307,7 +307,7 @@ def layout_pages(visuals: list[PlanVisual]) -> list[PlanVisual]:
              + sorted([v for v in visuals if v.role == "chart"], key=lambda v: v.page) + [v for v in visuals if v.role == "insights"])
     _assign_ids(order)
     for page in range(1, page_count(order) + 1):
-        layout([v for v in order if on_page(v, page)])
+        layout([v for v in order if on_page(v, page)], is_multi=page_count(order) > 1)
     return order
 
 
@@ -316,10 +316,11 @@ def page_plan(plan: DashboardPlan, page: int) -> DashboardPlan:
     visuals = [v.model_copy(deep=True) for v in plan.visuals if on_page(v, page)]
     name = plan.pages[page - 1] if page <= len(plan.pages) else PAGE_NAMES[page - 1]
     return plan.model_copy(update={"visuals": visuals, "pages": [name],
-                                   "subtitle": plan.subtitle if page == 1 else name})
+                                   "subtitle": plan.subtitle if page == 1 else name,
+                                   "total_pages": len(plan.pages)})
 
 
-def layout(visuals: list[PlanVisual]) -> list[PlanVisual]:
+def layout(visuals: list[PlanVisual], is_multi: bool = False) -> list[PlanVisual]:
     """Neutral 1280x720 grid for one page: top bar with slicers, KPI row, rows of charts + insights."""
     slicers = [v for v in visuals if v.role == "slicer"]
     kpis = [v for v in visuals if v.role == "kpi"]
@@ -328,8 +329,9 @@ def layout(visuals: list[PlanVisual]) -> list[PlanVisual]:
     inner = CANVAS_W - 2 * MARGIN
 
     # Top bar: title on the left (drawn by the design), slicers right-aligned.
+    # In multi-page dashboards, reserve space on the top right for native Overview/Details buttons.
     # The Date Range pill is wider: Power BI's between slicer needs ~170px for its two dates.
-    sh, right = 40, CANVAS_W - MARGIN
+    sh, right = 40, CANVAS_W - MARGIN - (208 if is_multi else 0)
     for v in reversed(slicers):
         sw = DATE_SLICER_W if v.title == "Date Range" else 200
         v.box = Box(x=right - sw, y=16, w=sw, h=sh)
@@ -435,7 +437,8 @@ def build_plan(title: str, model: ModelPlan, report: QualityReport, measures: li
     visuals = _slicers(dims) + _kpis(measures, cards) + _pick_charts(measures, dims, insights) + [_insights_box(insights)]
     paginate(visuals)
     visuals = layout_pages(visuals)
-    plan = DashboardPlan(title=title, subtitle="Executive overview", visuals=visuals, pages=PAGE_NAMES[:page_count(visuals)])
+    plan = DashboardPlan(title=title, subtitle="Executive overview", visuals=visuals,
+                         pages=PAGE_NAMES[:page_count(visuals)], total_pages=page_count(visuals))
     return finish(plan, measures, dims)
 
 
@@ -460,7 +463,8 @@ def apply_edit(plan: DashboardPlan, items: list[VisualInput], measures: list[Mea
     visuals = layout_pages(visuals)
     pages = page_count(visuals)
     names = (plan.pages + PAGE_NAMES[len(plan.pages):])[:pages]
-    new = DashboardPlan(title=(title or plan.title)[:80], subtitle=plan.subtitle, visuals=visuals, pages=names, source=plan.source, edited=True)
+    new = DashboardPlan(title=(title or plan.title)[:80], subtitle=plan.subtitle, visuals=visuals,
+                        pages=names, total_pages=pages, source=plan.source, edited=True)
     return finish(new, measures, dims)
 
 

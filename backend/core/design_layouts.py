@@ -117,16 +117,17 @@ def _hero(charts: list[PlanVisual]) -> tuple[PlanVisual | None, list[PlanVisual]
     return hero, [c for c in charts if c is not hero]
 
 
-def _header_row(slicers: list[PlanVisual]) -> Box:
-    left = _slicer_bar(slicers, CANVAS_W - M, 16, M + 360)
+def _header_row(slicers: list[PlanVisual], is_multi: bool = False) -> Box:
+    right = CANVAS_W - M - 208 if is_multi else CANVAS_W - M
+    left = _slicer_bar(slicers, right, 16, M + 360)
     return _b(M, 14, max(320, left - M - G), 46)
 
 
 # --- layouts --------------------------------------------------------------------------------------
 
-def _bento(visuals):
+def _bento(visuals, is_multi: bool = False):
     vs, slicers, kpis, charts, insights = _parts(visuals)
-    header = _header_row(slicers)
+    header = _header_row(slicers, is_multi=is_multi)
     y, inner = TOP, CANVAS_W - 2 * M
     if kpis:
         _row(kpis, M, y, inner, 96, gap=G)
@@ -143,9 +144,9 @@ def _bento(visuals):
     return vs, header, [("band", _b(0, 0, CANVAS_W, TOP - 4))] if not kpis else []
 
 
-def _hero_trend(visuals):
+def _hero_trend(visuals, is_multi: bool = False):
     vs, slicers, kpis, charts, insights = _parts(visuals)
-    header = _header_row(slicers)
+    header = _header_row(slicers, is_multi=is_multi)
     inner = CANVAS_W - 2 * M
     hero, rest = _hero(charts)
     y = TOP
@@ -163,7 +164,7 @@ def _hero_trend(visuals):
     return vs, header, []
 
 
-def _side_panel(visuals):
+def _side_panel(visuals, is_multi: bool = False):
     vs, slicers, kpis, charts, insights = _parts(visuals)
     rail = 336
     header = _b(M, 20, rail - 2 * M, 52)
@@ -202,9 +203,9 @@ def _side_panel(visuals):
     return vs, header, [("rail", _b(0, 0, rail, CANVAS_H))]
 
 
-def _executive_split(visuals):
+def _executive_split(visuals, is_multi: bool = False):
     vs, slicers, kpis, charts, insights = _parts(visuals)
-    header = _header_row(slicers)
+    header = _header_row(slicers, is_multi=is_multi)
     left_w = 736
     rx, rw = M + left_w + G, CANVAS_W - 2 * M - left_w - G
     body = CANVAS_H - M - TOP
@@ -232,9 +233,9 @@ def _executive_split(visuals):
     return vs, header, []
 
 
-def _command_center(visuals):
+def _command_center(visuals, is_multi: bool = False):
     vs, slicers, kpis, charts, insights = _parts(visuals)
-    header = _header_row(slicers)
+    header = _header_row(slicers, is_multi=is_multi)
     inner = CANVAS_W - 2 * M
     y = TOP
     if kpis:
@@ -250,9 +251,9 @@ def _command_center(visuals):
     return vs, header, [("band", _b(0, TOP - 6, CANVAS_W, 92 + 12))] if kpis else []
 
 
-def _editorial(visuals):
+def _editorial(visuals, is_multi: bool = False):
     vs, slicers, kpis, charts, insights = _parts(visuals)
-    header = _header_row(slicers)
+    header = _header_row(slicers, is_multi=is_multi)
     col_w = 280 if kpis else 0
     x_r = CANVAS_W - M - col_w
     body = CANVAS_H - M - TOP
@@ -271,9 +272,9 @@ def _editorial(visuals):
     return vs, header, []
 
 
-def _detail_focus(visuals):
+def _detail_focus(visuals, is_multi: bool = False):
     vs, slicers, kpis, charts, insights = _parts(visuals)
-    header = _header_row(slicers)
+    header = _header_row(slicers, is_multi=is_multi)
     inner = CANVAS_W - 2 * M
     y = TOP
     if kpis:
@@ -291,13 +292,14 @@ def _detail_focus(visuals):
     return vs, header, []
 
 
-def _classic(visuals):
+def _classic(visuals, is_multi: bool = False):
     from core.planner import layout  # noqa: PLC0415
 
     vs = [v.model_copy(deep=True) for v in visuals]
-    layout(vs)
+    layout(vs, is_multi=is_multi)
     slicers = [v for v in vs if v.role == "slicer"]
-    left = min((s.box.x for s in slicers), default=CANVAS_W - M)
+    right_limit = CANVAS_W - M - 208 if is_multi else CANVAS_W - M
+    left = min((s.box.x for s in slicers), default=right_limit)
     return vs, _b(M, 14, max(320, left - M - G), 46), []
 
 
@@ -309,7 +311,8 @@ _BUILDERS = {
 
 def arrange(page: DashboardPlan, layout: str) -> Arrangement:
     """Positions for one page (a plan from planner.page_plan) in the given layout; visual order is kept."""
-    built, header, panels = _BUILDERS[layout](page.visuals)
+    is_multi = getattr(page, "total_pages", 1) > 1 or len(getattr(page, "pages", [])) > 1 or any(v.page > 1 for v in page.visuals)
+    built, header, panels = _BUILDERS[layout](page.visuals, is_multi=is_multi)
     by_id = {v.id: v for v in built}
     return Arrangement(layout=layout, label=LAYOUTS[layout][0], visuals=[by_id[v.id] for v in page.visuals], header=header, panels=panels)
 

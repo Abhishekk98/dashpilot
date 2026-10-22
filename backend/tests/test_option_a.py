@@ -128,7 +128,8 @@ def test_stitch_export_imports_exactly(plan):
     o, b = (np.asarray(Image.open(io.BytesIO(p)).convert("RGB")).astype(int) for p in (original, background))
     chart = next(v for v in plan.visuals if v.role == "chart")
     row = (slice(chart.box.y, chart.box.y + 40), slice(chart.box.x, chart.box.x + chart.box.w))
-    assert np.abs(o[row] - b[row]).max() == 0 and np.abs(o[:62, :600] - b[:62, :600]).max() == 0
+    slicer_left = min(s.box.x for s in plan.visuals if s.role == "slicer")
+    assert np.abs(o[row] - b[row]).max() == 0 and np.abs(o[:62, :slicer_left - 10] - b[:62, :slicer_left - 10]).max() == 0
     theme = build_theme("Shop", found.palette, CTX.palette, found)
     assert theme["dataColors"][0] == "#E11D2E" and theme["textClasses"]["callout"]["color"] == "#1B1C1C"
 

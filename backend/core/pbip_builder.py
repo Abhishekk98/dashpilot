@@ -31,7 +31,7 @@ from core.dax import Measure
 from core.design_import import DetectedBox, MappingItem
 from core.modelling import ModelPlan
 from core.pbip_open import OPEN_CMD, OPEN_CMD_NAME
-from core.planner import DashboardPlan, PlanVisual
+from core.planner import CANVAS_W, MARGIN, DashboardPlan, PlanVisual
 from core import tmdl
 
 TEMPLATES = Path(__file__).resolve().parent.parent / "templates" / "visuals"
@@ -426,21 +426,19 @@ def visual_json(v: PlanVisual, item: MappingItem, box: DetectedBox | None, order
     if v.type == "text_box":
         raw_lines = v.text or ["Pin insights in DashPilot Step 6 to fill this box."]
         deduped = []
-        seen_words = set()
-        seen_nums = set()
+        seen_words: list[frozenset[str]] = []
         for line in raw_lines:
             hl = line.strip()
-            norm = re.sub(r"\b(was|is|for|in|to date|versus)\b", "", hl.lower())
-            words = frozenset(re.findall(r"\b[a-z0-9.%+-]+\b", norm))
-            nums = tuple(sorted(re.findall(r"\d+[\d.,]*%?[KMBkmb]?", hl)))
-            if words not in seen_words and (not nums or nums not in seen_nums):
-                seen_words.add(words)
-                if nums:
-                    seen_nums.add(nums)
-                deduped.append(hl)
+            norm = re.sub(r"\b(was|is|for|in|to date|versus|the|a|an)\b", "", hl.lower())
+            words = frozenset(re.findall(r"\b[a-z0-9$%+-]+\b", norm))
+            if words and any(len(words & prev) / max(len(words | prev), 1) >= 0.75 for prev in seen_words):
+                continue
+            if words:
+                seen_words.append(words)
+            deduped.append(hl)
         obj["general"] = [{"properties": {"paragraphs": [
             {"textRuns": [{"value": "• " + line, "textStyle": {"fontFamily": "Segoe UI", "fontSize": "10pt", "color": tokens["text"]}}]}
-            for line in deduped[:3]
+            for line in (deduped or raw_lines)[:3]
         ]}}]
     if obj:
         visual["objects"] = obj
@@ -509,6 +507,87 @@ def _page_json(name: str, display: str, plan: DashboardPlan, background: str, ca
     }
 
 
+def _is_light_color(hex_color: str) -> bool:
+    hex_clean = hex_color.lstrip("#")
+    if len(hex_clean) == 6:
+        try:
+            r, g, b = int(hex_clean[0:2], 16), int(hex_clean[2:4], 16), int(hex_clean[4:6], 16)
+            return (0.299 * r + 0.587 * g + 0.114 * b) > 160
+        except ValueError:
+            return True
+    return True
+
+
+def nav_button_json(page_num: int, target_num: int, target_page_name: str, label: str,
+                    x: int, y: int, w: int, h: int, is_active: bool, tokens: dict[str, str]) -> dict:
+    accent = tokens.get("accent", "#107C41")
+    card = tokens.get("card", "#FFFFFF")
+    grid = tokens.get("grid", "#E0E0E0")
+    muted = tokens.get("muted", "#4F5665")
+
+    if is_active:
+        font_color = "#111111" if _is_light_color(accent) else "#FFFFFF"
+        font_family = "Segoe UI Semibold"
+        fill_color = accent
+        outline_color = accent
+    else:
+        font_color = muted
+        font_family = "Segoe UI"
+        fill_color = card
+        outline_color = grid
+
+    return {
+        "$schema": SCHEMAS["visual"],
+        "name": _id("nav", str(page_num), target_page_name),
+        "position": {
+            "x": x,
+            "y": y,
+            "z": 9000 + target_num,
+            "height": h,
+            "width": w,
+            "tabOrder": 9000 + target_num,
+        },
+        "visual": {
+            "visualType": "actionButton",
+            "objects": {
+                "text": [{"properties": {
+                    "show": literal(True),
+                    "text": literal(label),
+                    "fontColor": color(font_color),
+                    "fontSize": literal(10),
+                    "fontFamily": literal(font_family),
+                    "horizontalAlignment": literal("center"),
+                    "verticalAlignment": literal("middle"),
+                }}],
+                "fill": [{"properties": {
+                    "show": literal(True),
+                    "fillColor": color(fill_color),
+                    "transparency": literal(0),
+                }}],
+                "outline": [{"properties": {
+                    "show": literal(True),
+                    "lineColor": color(outline_color),
+                    "weight": literal(1),
+                }}],
+            },
+            "visualContainerObjects": {
+                "background": [{"properties": {"show": literal(False)}}],
+                "border": [{"properties": {"show": literal(False)}}],
+                "dropShadow": [{"properties": {"show": literal(False)}}],
+                "visualHeader": [{"properties": {"show": literal(False)}}],
+                "title": [{"properties": {"show": literal(False)}}],
+                "visualLink": [{
+                    "properties": {
+                        "show": literal(True),
+                        "type": literal("PageNavigation"),
+                        "navigationSection": literal(target_page_name),
+                    }
+                }],
+            },
+        },
+    }
+
+
 def _report_files(inp: BuildInputs, root: str) -> dict[str, bytes]:
     d = f"{root}/definition"
     pages = inp.pages
@@ -549,6 +628,24 @@ def _report_files(inp: BuildInputs, root: str) -> dict[str, bytes]:
                 continue
             data = visual_json(v, item, boxes.get(item.box_id or ""), order, tokens, n, sync=len(pages) > 1)
             files[f"{d}/pages/{names[n - 1]}/visuals/{data['name']}/visual.json"] = _json(data)
+
+    if len(pages) > 1:
+        btn_w, btn_h, btn_gap, btn_y = 92, 30, 8, 20
+        total_w = len(pages) * btn_w + (len(pages) - 1) * btn_gap
+        start_x = CANVAS_W - MARGIN - total_w
+        for n in range(1, len(pages) + 1):
+            curr_page_name = names[n - 1]
+            for t in range(1, len(pages) + 1):
+                target_page_name = names[t - 1]
+                label = "Overview" if t == 1 else (pages[t - 1].plan.pages[0] if pages[t - 1].plan.pages else f"Page {t}")
+                bx = start_x + (t - 1) * (btn_w + btn_gap)
+                btn_data = nav_button_json(
+                    page_num=n, target_num=t, target_page_name=target_page_name,
+                    label=label, x=bx, y=btn_y, w=btn_w, h=btn_h,
+                    is_active=(t == n), tokens=tokens,
+                )
+                files[f"{d}/pages/{curr_page_name}/visuals/{btn_data['name']}/visual.json"] = _json(btn_data)
+
     return files
 
 

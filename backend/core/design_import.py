@@ -638,6 +638,7 @@ _HIDE_CSS = """
 [data-dp-hide] [data-dp-title], [data-dp-hide] [data-dp-title] * { visibility: visible !important; }
 [data-dp-hide] [data-chart-area], [data-dp-hide-all] [data-chart-area] { visibility: visible !important; }
 [data-dp-hide] [data-chart-area] * { visibility: hidden !important; }
+[data-dp-hide] .dp-kpi-bar { visibility: visible !important; }
 [data-dp-hide-all] *:not([data-chart-area]) { visibility: hidden !important; }
 """
 
