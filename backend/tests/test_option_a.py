@@ -87,9 +87,10 @@ def test_prompt_has_exact_layout_and_rules(plan):
     p = build_prompt(plan, ctx, "dark_futuristic", ["Which city drives revenue?"])
     text = p.prompt
     for v in plan.visuals:
-        assert f'"{v.title}"' in text and f"x {v.box.x}, y {v.box.y}, {v.box.w}×{v.box.h}px" in text
-    assert "1280px wide and 720px tall" in text and "EXACTLY as written" in text and "Segoe UI" in text
-    assert "Dark Futuristic" in text and "Which city drives revenue?" in text and ctx.palette.accent in text
+        assert f'"{v.title}"' in text
+    assert "1280x720 Power BI canvas" in text and "EXACTLY as written" in text and "Segoe UI" in text
+    assert "Dark Futuristic" in text and "sidebar navigation" in text and ctx.palette.accent in text
+    assert "KPI CARDS" in text and "CHARTS & VISUALIZATIONS" in text and "AI INSIGHTS PANEL" in text
     assert {s["id"] for s in p.styles} >= {"dark_futuristic", "light_elegant", "glassmorphism", "minimal_corporate", "neon_tech"}
 
 

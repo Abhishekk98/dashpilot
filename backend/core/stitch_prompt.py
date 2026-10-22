@@ -1,8 +1,13 @@
-"""Google Stitch prompt for the planned dashboard (spec 9.1).
+"""Google Stitch prompt for the planned dashboard.
 
-The prompt follows the spec's template and adds the exact layout (every card's position, size and
-title from the Dashboard Plan) plus strict build rules, so the HTML Stitch exports can be imported
-1:1: one 1280x720 canvas, one card per visual with its exact title, empty-looking chart areas.
+Generates a focused, high-level prompt specifying:
+- Dashboard title & pages
+- Per-page KPI cards with exact measure names
+- Charts with type and dimension/measure fields
+- Slicers (filters)
+- AI insights panel
+- Left sidebar navigation
+- Style: premium, futuristic, advanced layout, 1280x720 Power BI canvas, dark/glass theme, sidebar navigation.
 """
 
 from __future__ import annotations
@@ -17,23 +22,22 @@ from core.planner import DashboardPlan, PlanVisual
 StitchStyle = Literal["dark_futuristic", "light_elegant", "glassmorphism", "minimal_corporate", "neon_tech"]
 
 STYLES: dict[str, tuple[str, str, str]] = {  # id -> (label, direction, card style)
-    "dark_futuristic": ("Dark Futuristic", "premium, futuristic and elegant on a near-black canvas, subtle accent glow", "dark translucent cards with a 1px light border and a soft accent glow"),
-    "light_elegant": ("Light Elegant", "premium, airy and elegant on a warm light canvas, refined editorial spacing", "white cards with a very soft shadow"),
-    "glassmorphism": ("Glassmorphism", "premium glassmorphism on a soft gradient canvas, layered depth", "frosted translucent white cards with blur and a thin white border"),
-    "minimal_corporate": ("Minimal Corporate", "clean, minimal and corporate, flat surfaces, strict grid", "flat white cards with a 1px light-grey border, no shadow"),
-    "neon_tech": ("Neon Tech", "bold neon tech on a deep navy canvas, high contrast", "dark cards with a thin neon outline and glow"),
+    "dark_futuristic": ("Dark Futuristic", "premium, futuristic, advanced layout, 1280x720 Power BI canvas, dark/glass theme, sidebar navigation", "dark translucent cards with a 1px light border and a soft neon glow"),
+    "light_elegant": ("Light Elegant", "premium, airy and elegant on a warm light canvas, refined editorial spacing", "white frosted glass cards with a very soft shadow"),
+    "glassmorphism": ("Glassmorphism", "premium glassmorphism on a soft gradient canvas, layered depth", "frosted translucent glass cards with blur and a thin white border"),
+    "minimal_corporate": ("Minimal Corporate", "clean, minimal and corporate, flat dark surfaces, strict grid", "flat dark cards with a 1px subtle border, no heavy shadow"),
+    "neon_tech": ("Neon Tech", "bold neon tech on a deep navy canvas, high contrast", "dark cards with a thin neon outline and cyber glow"),
 }
 
-DARK = {"dark_futuristic": ("#0E0F12", "#F2F0F0"), "neon_tech": ("#0B1020", "#EAF2FF")}  # (canvas, text)
+DARK = {"dark_futuristic": ("#0A0E1A", "#F2F5FA"), "neon_tech": ("#080C16", "#EAF2FF"), "minimal_corporate": ("#0D1117", "#E6EDF3")}
 
 KIND = {
-    "card": "KPI card", "line": "line chart", "area": "area chart", "clustered_bar": "clustered bar chart (horizontal bars)",
-    "clustered_column": "clustered column chart (vertical bars)", "stacked_bar": "stacked bar chart", "stacked_column": "stacked column chart",
-    "donut": "donut chart", "map": "map", "filled_map": "filled map", "table": "table", "matrix": "matrix",
-    "slicer": "slicer (dropdown pill)", "gauge": "gauge", "scatter": "scatter chart", "waterfall": "waterfall chart",
+    "card": "KPI card", "line": "line chart", "area": "area chart", "clustered_bar": "clustered bar chart (horizontal)",
+    "clustered_column": "clustered column chart (vertical)", "stacked_bar": "stacked bar chart", "stacked_column": "stacked column chart",
+    "donut": "donut chart", "map": "map", "filled_map": "filled map", "table": "table", "matrix": "matrix with data bars",
+    "slicer": "filter dropdown pill", "gauge": "gauge chart", "scatter": "scatter chart", "waterfall": "waterfall chart",
     "funnel": "funnel chart", "text_box": "text box",
 }
-FONTS = {"Outfit + Inter": "Outfit", "Segoe UI": "Segoe UI", "Inter": "Inter", "Georgia + Segoe UI": "Georgia"}
 
 
 class StitchPrompt(BaseModel):
@@ -47,64 +51,74 @@ def _field(v: PlanVisual) -> str:
     return (v.dimension or "").split("[")[-1].rstrip("]").replace("_", " ")
 
 
-def _line(v: PlanVisual) -> str:
-    b = v.box
-    where = f"x {b.x}, y {b.y}, {b.w}×{b.h}px"
-    if v.role == "slicer":
-        return f'- Slicer "{v.title}" (dropdown pill) at {where}: the label "{v.title}" on the left, a dropdown on the right.'
-    if v.role == "kpi":
-        return f'- KPI card "{v.title}" at {where}: the title, then one large placeholder value, a % change and a tiny trend line.'
-    if v.role == "insights":
-        return f'- Text box "{v.title}" at {where}: the title, then up to 3 short bullet lines of placeholder text.'
-    what = ", ".join(v.measures) + (f" by {_field(v)}" if v.dimension else "")
-    return f'- {KIND.get(v.type, v.type).capitalize()} "{v.title}" at {where}: shows {what}.'
-
-
-def build(plan: DashboardPlan, context: BusinessContext, style: StitchStyle = "light_elegant", questions: list[str] | None = None) -> StitchPrompt:
-    label, direction, cards = STYLES[style]
+def build(plan: DashboardPlan, context: BusinessContext, style: StitchStyle = "dark_futuristic", questions: list[str] | None = None) -> StitchPrompt:
+    label, direction, cards = STYLES.get(style, STYLES["dark_futuristic"])
     p = context.palette
-    # Dark styles need a dark canvas and light text; light styles use the brand's own canvas and text.
     canvas, text = DARK.get(style, (p.canvas, p.base))
-    heading = FONTS.get(context.font_stack, "Segoe UI")
     company = context.company_name or plan.title.removesuffix(" Performance Dashboard")
-    industry = ", ".join(context.industries) or "business"
-    audience = ", ".join(context.audiences) or "executives"
-    kpis = [v for v in plan.visuals if v.role == "kpi"]
+
+    pages_list = plan.pages if plan.pages else ["Overview"]
+    curr_page = pages_list[0] if pages_list else "Overview"
+    pages_str = ", ".join(f'"{pg}"' for pg in pages_list)
+
     slicers = [v for v in plan.visuals if v.role == "slicer"]
-    rows: dict[int, list[PlanVisual]] = {}
-    for v in plan.visuals:
-        if v.role in ("chart", "insights"):
-            rows.setdefault(v.box.y, []).append(v)
-    visual_rows = "\n".join(
-        f"- Row {n + 2}: " + "; ".join(f'{KIND.get(v.type, v.type)} "{v.title}"' for v in sorted(rows[y], key=lambda v: v.box.x))
-        for n, y in enumerate(sorted(rows))
-    )
-    layout = "\n".join(_line(v) for v in plan.visuals)
-    qs = "\n".join(f"- {q}" for q in (questions or [])[:6]) or "- " + "\n- ".join(v.purpose for v in plan.visuals if v.role == "chart" and v.purpose)
-    allowed = "KPI/card, line, area, clustered bar/column, stacked bar/column, donut, map/filled map, table, matrix, slicer, gauge, scatter, waterfall, funnel, text box"
-    prompt = f"""Design a premium, futuristic, elegant Power BI dashboard UI on a 1280x720 canvas for {company}, a {industry} company. Audience: {audience}.
+    slicers_lines = [f'- Slicer: "{s.title}" (Field: {_field(s) or s.title})' for s in slicers]
+    slicers_block = "\n".join(slicers_lines) if slicers_lines else "- Date Range slicer and Category filter pills"
 
-BRAND THEME: Primary {p.accent}, background {canvas}, cards: {cards}, 16px rounded corners, accents {p.accent}, {p.growth}, {p.muted}; text {text}. Headings in "{heading}", all chart labels and numbers in "Segoe UI". Style: {label} — {direction}.
+    kpis = [v for v in plan.visuals if v.role == "kpi"]
+    kpis_lines = []
+    for k in kpis:
+        m_name = k.measures[0] if k.measures else k.title
+        kpis_lines.append(f'- KPI Card: "{k.title}" (Measure: [{m_name}]) — value + "vs PY" delta pill + sparkline')
+    kpis_block = "\n".join(kpis_lines) if kpis_lines else "- KPI cards for core business metrics"
 
-LAYOUT:
-- Top bar: logo placeholder (left), title "{plan.title}", slicers: {", ".join(f'"{s.title}"' for s in slicers) or "none"} (right)
-- Row 1: {len(kpis)} KPI cards: {", ".join(f'"{k.title}"' for k in kpis)} — each with value, % change and small trend
-{visual_rows}
+    charts = [v for v in plan.visuals if v.role == "chart"]
+    charts_lines = []
+    for c in charts:
+        ctype = KIND.get(c.type, c.type)
+        m_str = ", ".join(f"[{m}]" for m in c.measures) or "metric"
+        dim_str = f"by {_field(c)}" if c.dimension else ""
+        charts_lines.append(f'- {ctype.capitalize()}: "{c.title}" (Measures: {m_str} {dim_str})')
+    charts_block = "\n".join(charts_lines) if charts_lines else "- Charts showing trends and category distributions"
 
-EXACT POSITIONS (px on the 1280x720 canvas — keep every card exactly here):
-- Header at x 24, y 14, 640×46px: logo placeholder, the title "{plan.title}" and the subtitle "{company} • {plan.subtitle}".
-{layout}
+    insights = [v for v in plan.visuals if v.role == "insights"]
+    insights_title = insights[0].title if insights else "Key Insights"
 
-BUSINESS QUESTIONS THIS DASHBOARD ANSWERS:
-{qs}
+    prompt = f"""Design a dashboard UI on a 1280x720 Power BI canvas for {company}.
 
-RULES (the design is imported into Power BI automatically, so follow them exactly):
-1. The whole dashboard is ONE root container exactly 1280px wide and 720px tall. Nothing outside it, no scrolling, no responsive resizing.
-2. Every item listed under EXACT POSITIONS is its own separate card container (its own background, border or shadow) at exactly that position and size. Do not add any other cards, sidebars, navigation, tabs, footers or extra sections.
-3. Each card shows its title text EXACTLY as written above (same words, same capitalisation) as the first text in the card. Titles are used to match the Power BI visuals.
-4. Inside chart cards draw only a simple placeholder of that chart type. No other text in the chart area: no axis labels, legends, numbers or annotations — only the title.
-5. Use only chart types available in Power BI: {allowed}.
-6. All chart labels and numbers in "Segoe UI". Keep consistent spacing and alignment on the grid above.
-7. No photos or illustrations; only the logo placeholder in the header.
-Premium, minimal, high contrast, generous spacing, aligned grid, no clutter."""
+STYLE:
+premium, futuristic, advanced layout, 1280x720 Power BI canvas, dark/glass theme, sidebar navigation
+- Aesthetic: {label} — {direction}
+- Canvas: Exact 1280x720 px, dark canvas {canvas}, primary text {text}, accent {p.accent}
+- Cards: {cards}, 14-16px rounded corners, subtle shadows, consistent 16px grid
+
+DASHBOARD TITLE & PAGES:
+- Dashboard Title: "{plan.title}"
+- Pages: {len(pages_list)} pages ({pages_str})
+- Current Page: "{curr_page}"
+
+NAVIGATION:
+- Left sidebar navigation panel: logo placeholder at the top, followed by vertical page navigation buttons ({pages_str})
+- Active page highlighted: "{curr_page}"
+
+FILTERS (SLICERS):
+{slicers_block}
+
+KPI CARDS:
+{kpis_block}
+(Each card has metric title, large bold value, delta tag, and mini progress/sparkline)
+
+CHARTS & VISUALIZATIONS:
+{charts_block}
+(Inside each chart card, show visual title and leave chart area clear with a clean subtle placeholder for Power BI interactive visuals)
+
+AI INSIGHTS PANEL:
+- "{insights_title}": numbered bullet points [1], [2], [3] summarizing key business takeaways and trends
+
+RULES:
+1. Root container must be exactly 1280px wide by 720px tall (overflow: hidden, no scrolling).
+2. Each visual card MUST display its title EXACTLY as written above so Power BI can bind data automatically.
+3. Clean typography using "Segoe UI" or "DIN", high contrast, aligned grid.
+4. Export clean HTML with modern CSS/Tailwind and a full screenshot (screen.png)."""
+
     return StitchPrompt(style=style, styles=[{"id": k, "label": v[0]} for k, v in STYLES.items()], prompt=prompt, visuals=len(plan.visuals))

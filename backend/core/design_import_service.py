@@ -11,6 +11,7 @@ Files per page (read by the PBIP builder in Step 9):
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import logging
 import time
@@ -136,6 +137,19 @@ def _stitch_screen(store: ProjectStore, project: Project, page: int = 1) -> byte
     return path.read_bytes() if path.exists() else None
 
 
+def _normalize_screen_png(screen: bytes) -> bytes:
+    try:
+        from PIL import Image  # noqa: PLC0415
+        im = Image.open(io.BytesIO(screen))
+        if im.size != (1280, 720):
+            im = im.resize((1280, 720), Image.Resampling.LANCZOS)
+        buf = io.BytesIO()
+        im.convert("RGB").save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception:
+        return screen
+
+
 def _finish(store: ProjectStore, project: Project, plan: DashboardPlan, imp: DesignImport, html: str, page: int = 1,
             pages: list[str] | None = None) -> ImportResponse:
     imp.issues = validate_mapping(plan, imp.mapping, imp.boxes)
@@ -148,9 +162,17 @@ def _finish(store: ProjectStore, project: Project, plan: DashboardPlan, imp: Des
     hide = [m.box_id for m in imp.mapping if m.box_id and m.placed]
     hide_titles = [m.box_id for m in imp.mapping if m.box_id and m.pbi_title]
     original, background = render_design(html, hide, imp.scripts, hide_titles)
-    (folder / "background.png").write_bytes(background)
-    (folder / "original.png").write_bytes(original)
+
     screen_path = folder / SOURCE_SCREEN
+    if screen_path.exists() and imp.source == "option_a":
+        # Stitch export provides screen.png: use the actual Stitch screen image as page background
+        screen_bytes = _normalize_screen_png(screen_path.read_bytes())
+        (folder / "background.png").write_bytes(screen_bytes)
+        (folder / "original.png").write_bytes(screen_bytes)
+    else:
+        (folder / "background.png").write_bytes(background)
+        (folder / "original.png").write_bytes(original)
+
     imp.fidelity = score(original, background, imp.boxes, imp.mapping, titles,
                          screen_path.read_bytes() if screen_path.exists() else None, imp.source_w, imp.source_h, imp.scale)
     imp.background_version = str(int(time.time() * 1000))
@@ -170,14 +192,27 @@ def run_import(store: ProjectStore, project: Project, llm: LLMProvider | None, s
         (folder / SOURCE_SCREEN).unlink(missing_ok=True)
     # Stitch exports style themselves with the Tailwind CDN script; it runs with all other network blocked.
     scripts = scripts or "cdn.tailwindcss.com" in html
+    fallback_note: str | None = None
     try:
         found = extract(html, scripts)
+        if not found.boxes:
+            raise ValueError("No containers found in design.")
     except Exception as exc:
-        logger.warning("Design render failed: %s", exc)
-        raise ImportError_(f"Could not render the design ({str(exc).splitlines()[0][:160] or type(exc).__name__}).") from exc
-    if not found.boxes:
-        raise ImportError_("No cards or containers were found in this design. Is it a 1280x720 dashboard page?")
+        if source == "option_a":
+            logger.warning("Stitch import failed, falling back to built-in template: %s", exc)
+            fallback_note = f"⚠️ Warning: Stitch design could not be parsed ({str(exc).splitlines()[0][:100]}). Fell back to built-in template layout."
+            from core.design_ai import template_html  # noqa: PLC0415
+            context = get_context(store, project)
+            html = template_html(plan, context, archetype="dark_neon")
+            found = extract(html, False)
+            (folder / "source.html").write_text(html, encoding="utf-8")
+        else:
+            logger.warning("Design render failed: %s", exc)
+            raise ImportError_(f"Could not render the design ({str(exc).splitlines()[0][:160] or type(exc).__name__}).") from exc
+
     mapping, notes = match(plan, found.boxes, llm)
+    if fallback_note:
+        notes.insert(0, fallback_note)
     context = get_context(store, project)
     if found.skipped:
         notes.append(f"{found.skipped} container{'s' if found.skipped != 1 else ''} outside the 1280x720 canvas were ignored.")

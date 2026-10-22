@@ -165,9 +165,15 @@ export function OptionAPanel({ projectId, visuals, design, blocked, selecting, o
               <span>{new Date(state.upload.uploaded_at).toLocaleString()}</span>
             </div>
           )}
-          {state?.notes.map((n) => (
-            <p key={n} className="flex items-start gap-1.5 font-body-md text-xs text-on-surface"><Icon name="info" className="text-[14px] shrink-0 mt-0.5" /> {n}</p>
-          ))}
+          {state?.notes.map((n) => {
+            const isWarn = n.includes("Warning") || n.includes("⚠️") || n.includes("fallback") || n.includes("Fell back");
+            return (
+              <div key={n} className={`p-2.5 rounded-inner flex items-start gap-2 font-body-md text-xs ${isWarn ? "bg-amber-500/15 text-amber-200 border border-amber-500/30" : "text-on-surface"}`}>
+                <Icon name={isWarn ? "warning" : "info"} className={`text-[16px] shrink-0 mt-0.5 ${isWarn ? "text-amber-400" : "text-on-surface-variant"}`} />
+                <span>{n}</span>
+              </div>
+            );
+          })}
         </div>
       </div>
 
