@@ -321,6 +321,22 @@ def validate(files: dict[str, bytes], width: int = 1280, height: int = 720) -> l
             for name in data.get("pageOrder", []):
                 if not any(p.endswith(f"/pages/{name}/page.json") for p in pages):
                     layout_issues.append(f"pages.json lists page {name}, which is missing.")
+    if len(pages) > 1:
+        for p_path in pages:
+            page_dir = p_path.removesuffix("/page.json")
+            page_name_val = parsed[p_path].get("displayName") or parsed[p_path].get("name", p_path.split("/")[-2])
+            page_visuals = [d for p, d in visuals.items() if p.startswith(page_dir + "/visuals/")]
+            nav_btns = [
+                d for d in page_visuals
+                if d.get("visual", {}).get("visualType") == "actionButton"
+                and any(
+                    vl.get("properties", {}).get("type", {}).get("expr", {}).get("Literal", {}).get("Value") == "'PageNavigation'"
+                    or "'PageNavigation'" in json.dumps(vl)
+                    for vl in d.get("visual", {}).get("visualContainerObjects", {}).get("visualLink", [])
+                )
+            ]
+            if not nav_btns:
+                layout_issues.append(f"Page '{page_name_val}' lacks navigation buttons (required for multi-page dashboards).")
     maps = [d["name"] for d in visuals.values() if d.get("visual", {}).get("visualType") == "azureMap"]
     if maps:
         layout_issues_warn = [f"{len(maps)} map visual(s): Power BI shows them only when the Azure Maps tenant setting is on "

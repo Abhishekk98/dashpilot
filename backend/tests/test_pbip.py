@@ -423,6 +423,13 @@ def test_multipage_navigation_buttons(shop):
     failures = [(c.id, c.issues) for c in checks if c.status == "fail"]
     assert not failures, f"PBIP validation failed: {failures}"
 
+    # 4. Multi-page dashboard without nav buttons on a page fails validator
+    files_no_nav = {p: c for p, c in files.items() if not (f"/pages/{p1_name}/visuals/" in p and "actionButton" in c.decode("utf-8", errors="ignore"))}
+    fail_checks = validate(files_no_nav)
+    layout_check = next(c for c in fail_checks if c.id == "layout")
+    assert layout_check.status == "fail"
+    assert any("lacks navigation buttons" in issue for issue in layout_check.issues)
+
 
 # --- fuzz ----------------------------------------------------------------------------------------------
 

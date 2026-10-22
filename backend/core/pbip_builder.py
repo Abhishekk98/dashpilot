@@ -588,6 +588,22 @@ def nav_button_json(page_num: int, target_num: int, target_page_name: str, label
     }
 
 
+def _is_sidebar_page(pg: PageInput) -> tuple[bool, int]:
+    """Detect if the page uses a left sidebar layout and return (is_sidebar, sidebar_w)."""
+    boxes = {b.id: b for b in pg.boxes}
+    mapping = {m.visual_id: m for m in pg.mapping}
+    xs = [
+        item.x if item.x > 0 else (boxes[item.box_id].x if item.box_id in boxes else 0)
+        for v in pg.plan.visuals
+        if v.role in ("kpi", "chart", "insights")
+        for item in [mapping.get(v.id)]
+        if item and item.placed
+    ]
+    if xs and min(xs) >= 200:
+        return True, min(xs) - MARGIN
+    return False, 0
+
+
 def _report_files(inp: BuildInputs, root: str) -> dict[str, bytes]:
     d = f"{root}/definition"
     pages = inp.pages
@@ -630,18 +646,36 @@ def _report_files(inp: BuildInputs, root: str) -> dict[str, bytes]:
             files[f"{d}/pages/{names[n - 1]}/visuals/{data['name']}/visual.json"] = _json(data)
 
     if len(pages) > 1:
-        btn_w, btn_h, btn_gap, btn_y = 92, 30, 8, 20
-        total_w = len(pages) * btn_w + (len(pages) - 1) * btn_gap
-        start_x = CANVAS_W - MARGIN - total_w
         for n in range(1, len(pages) + 1):
             curr_page_name = names[n - 1]
+            pg = pages[n - 1]
+            is_sidebar, sidebar_w = _is_sidebar_page(pg)
+            if is_sidebar:
+                btn_x = MARGIN
+                btn_w = max(160, sidebar_w - MARGIN)
+                btn_h = 36
+                btn_gap = 8
+                btn_start_y = 80
+            else:
+                btn_w, btn_h, btn_gap, btn_y = 92, 30, 8, 20
+                total_w = len(pages) * btn_w + (len(pages) - 1) * btn_gap
+                start_x = CANVAS_W - MARGIN - total_w
+
             for t in range(1, len(pages) + 1):
                 target_page_name = names[t - 1]
-                label = "Overview" if t == 1 else (pages[t - 1].plan.pages[0] if pages[t - 1].plan.pages else f"Page {t}")
-                bx = start_x + (t - 1) * (btn_w + btn_gap)
+                label = pages[t - 1].plan.pages[0] if pages[t - 1].plan.pages else ("Overview" if t == 1 else f"Page {t}")
+                if is_sidebar:
+                    bx = btn_x
+                    by = btn_start_y + (t - 1) * (btn_h + btn_gap)
+                    bw, bh = btn_w, btn_h
+                else:
+                    bx = start_x + (t - 1) * (btn_w + btn_gap)
+                    by = btn_y
+                    bw, bh = btn_w, btn_h
+
                 btn_data = nav_button_json(
                     page_num=n, target_num=t, target_page_name=target_page_name,
-                    label=label, x=bx, y=btn_y, w=btn_w, h=btn_h,
+                    label=label, x=bx, y=by, w=bw, h=bh,
                     is_active=(t == n), tokens=tokens,
                 )
                 files[f"{d}/pages/{curr_page_name}/visuals/{btn_data['name']}/visual.json"] = _json(btn_data)
