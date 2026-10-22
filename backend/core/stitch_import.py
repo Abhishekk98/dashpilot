@@ -23,8 +23,9 @@ from pathlib import PurePosixPath
 
 from pydantic import BaseModel
 
+from PIL import Image
+
 from core.projects import Project, ProjectStore
-from core.style_profile import StyleError, open_image
 from llm import LLMProvider
 
 MAX_UPLOAD = 25 * 1024 * 1024
@@ -56,6 +57,18 @@ def _html(data: bytes, name: str) -> str:
     if "<" not in html or not any(t in low for t in ("<div", "<body", "<section", "<main")):
         raise StitchError(f"{name} does not look like an HTML page.")
     return html
+
+
+def _screenshot_ok(data: bytes) -> bool:
+    """A sane PNG/JPEG/WebP screenshot (anything else is ignored, not an error)."""
+    try:
+        img = Image.open(io.BytesIO(data))
+        if img.format not in ("PNG", "JPEG", "WEBP") or img.width * img.height > 40_000_000 or img.width < 200 or img.height < 120:
+            return False
+        img.verify()
+        return True
+    except Exception:
+        return False
 
 
 def _safe_name(info: zipfile.ZipInfo) -> PurePosixPath:
@@ -107,11 +120,8 @@ def read_export(filename: str, data: bytes) -> StitchExport:
     screen = None
     if shot_info is not None:
         raw = zf.read(shot_info)
-        try:
-            open_image(raw)
-            screen = raw
-        except StyleError:
-            screen = None  # a broken screenshot only means we compare against our own render
+        # a broken screenshot only means we compare against our own render
+        screen = raw if _screenshot_ok(raw) else None
     return StitchExport(name=name, html=_html(zf.read(page), paths[page.filename].name), screen=screen,
                         files=[str(paths[i.filename]) for i in infos][:50])
 

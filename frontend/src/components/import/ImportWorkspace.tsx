@@ -277,11 +277,7 @@ export function ImportWorkspace() {
             <div className="flex items-center gap-2 p-1 rounded-full bg-surface-container shadow-inner">
               <span className="px-4 py-1.5 rounded-full bg-primary-container text-on-primary font-label-md text-label-md flex items-center gap-2 shadow-sm">
                 <Icon name="code" className="text-[15px] text-secondary-container" /> HTML Export (Recommended) • DOM &amp; CSS
-              </span>
-              <span title="Image imports arrive with design method C" className="px-4 py-1.5 rounded-full text-on-surface-variant/60 font-label-md text-label-md flex items-center gap-1.5 cursor-not-allowed">
-                <Icon name="image" className="text-[15px]" /> Image (PNG / Mockup) · soon
-              </span>
-            </div>
+              </span>            </div>
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"

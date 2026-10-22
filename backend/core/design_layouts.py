@@ -1,4 +1,4 @@
-"""Layout library for DashPilot designs (Option B; Option C falls back to it).
+"""Layout library for DashPilot designs (Option B).
 
 The plan says WHAT is on a page; a layout decides WHERE. Every layout takes one page of the plan
 (slicers, KPI cards, charts, the insights box, in any number the plan allows) and returns positions

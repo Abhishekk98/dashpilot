@@ -52,7 +52,7 @@ MAX_HTML = 80_000
 
 
 class DesignVariant(BaseModel):
-    id: str  # Option B: an Archetype; Option C: "reference_close" / "reference_brand"
+    id: str  # an Archetype
     label: str
     html: str
     source: Literal["ai", "template"]
@@ -435,7 +435,7 @@ def generate_styled(plan: DashboardPlan, variant_id: str, label: str, style: str
                     llm: LLMProvider | None, prefer_browser: bool = True) -> tuple[DesignVariant, bool]:
     """AI restyle of `baseline` checked against the design contract: 2 retries with the validator's
     errors, then the baseline template. Returns (variant, ai_still_usable) — False after quota/key
-    errors so callers stop asking. Shared by design methods B (presets) and C (reference style)."""
+    errors so callers stop asking."""
     if llm is None:
         _, m = check(baseline, plan, prefer_browser)
         return DesignVariant(id=variant_id, label=label, html=baseline, source="template", engine=m.engine,

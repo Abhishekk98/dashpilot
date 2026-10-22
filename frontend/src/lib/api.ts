@@ -487,7 +487,7 @@ export interface DashboardPlan {
 export type DesignStyle = "dark_neon" | "glass_light" | "gradient_corporate" | "command_center" | "dark_futuristic" | "light_elegant" | "glassmorphism";
 
 export interface DesignVariant {
-  /** Option B: a DesignStyle; Option C: "reference_close" | "reference_brand". */
+  /** Option B: a DesignStyle. */
   id: string;
   label: string;
   html: string;
@@ -580,7 +580,7 @@ export interface FidelityReport {
 }
 
 export interface DesignImport {
-  source: "option_a" | "option_b" | "option_c" | "upload";
+  source: "option_a" | "option_b" | "upload";
   source_w: number;
   source_h: number;
   scale: number;

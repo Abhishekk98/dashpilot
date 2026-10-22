@@ -2,8 +2,7 @@
 
 The plan holds the visuals (role, type, title, fields, sort, purpose) and the page each one is on;
 slicers appear on every page. WHERE they go is decided by the design the user picks
-(core.design_layouts for DashPilot designs, the reference image for Option C, Google Stitch for
-Option A). Each visual still carries a neutral grid `box`, used only for the plan preview and as a
+(core.design_layouts for DashPilot designs, Google Stitch for Option A). Each visual still carries a neutral grid `box`, used only for the plan preview and as a
 fallback. Chart choice is rule-based and deterministic; the LLM may only polish titles and
 purposes (never numbers, types or fields). A validator keeps the plan to Power BI native visuals,
 Passed measures and real model fields.

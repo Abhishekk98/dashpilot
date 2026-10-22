@@ -46,8 +46,6 @@ backend/
                            # + planner_service, design_ai (method B), design_contract (shared Playwright
                            #   render_page/measure + contract checks), design_import(_service) (Step 8:
                            #   boxes, mapping, background.png, theme.json in storage/{id}/design/);
-                           #   style_profile + design_option_c (method C: reference image → style
-                           #   profile → 2 variants via design_ai.generate_styled; selected.html as for B),
                            #   stitch_prompt + stitch_import (method A: prompt, safe export zip/html upload into
                            #   the shared import), design_fidelity (background vs Stitch screen.png, build gate)
   llm/                     # base.py (LLMProvider interface, errors, retry), gemini.py, claude.py,
@@ -68,17 +66,16 @@ At the design stage the user picks one method on `/project/design-method` (track
   business questions, brand and a style preset (Dark Futuristic, Light Elegant, Glassmorphism, Minimal Corporate,
   Neon Tech). Design validator → on failure send the errors back and retry max 2 times → else built-in HTML
   template (`backend/templates/designs/`). 2–3 variants as preview images; user picks, can restyle/regenerate.
-- **C. Design from Reference Image** — LLM vision → editable style-profile JSON → Option B generates a new design
-  with that style (take the style, never copy the reference layout).
+(The reference-image method C was removed on the user's request; only A and B exist.)
 
-Design contract (B and C): 1280×720 canvas; every chart/card container has `data-visual-id`, `data-type`,
+Design contract (B): 1280×720 canvas; every chart/card container has `data-visual-id`, `data-type`,
 `data-title`; only Power BI-supported visual types; chart areas empty; chart text in Segoe UI; no scripts.
 Validator: no overlaps, everything inside the canvas, exactly one container per planned visual.
 
-**Rule:** all three methods only *produce* a 1280×720 HTML design; they all reuse the one shared
+**Rule:** both methods only *produce* a 1280×720 HTML design; they reuse the one shared
 Design Import → PBIP Build pipeline (`core/design_import.py` → `core/pbip_builder.py`). Never duplicate import,
-layout-check or build code per method. Build order: B (with template fallback) → C → A's Stitch import.
-Plans: Free/Student = B; Pro = A, B, C; Agency = all + custom brand kits.
+layout-check or build code per method.
+Plans: Free/Student = B; Pro = A, B; Agency = all + custom brand kits.
 
 ## Scope decisions (V1)
 - Functionality follows the V1 spec: CSV/Excel uploads, ~100 MB limit, single-page PBIP.
