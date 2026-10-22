@@ -48,6 +48,7 @@ class ProjectSummary(BaseModel):
     name: str
     created_at: datetime
     updated_at: datetime
+    files: list[StoredFile] = Field(default_factory=list)
     files_count: int
     tables_count: int
     rows_total: int
@@ -217,6 +218,7 @@ class ProjectStore:
             name=project.name,
             created_at=project.created_at,
             updated_at=updated_at,
+            files=files,
             files_count=len(files),
             tables_count=tables_count,
             rows_total=rows_total,

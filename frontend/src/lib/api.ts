@@ -39,6 +39,7 @@ export interface ProjectSummary {
   name: string;
   created_at: string;
   updated_at: string;
+  files: StoredFile[];
   files_count: number;
   tables_count: number;
   rows_total: number;
