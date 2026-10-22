@@ -31,7 +31,8 @@ from core.dax import Measure
 from core.design_import import DetectedBox, MappingItem
 from core.modelling import ModelPlan
 from core.pbip_open import OPEN_CMD, OPEN_CMD_NAME
-from core.planner import CANVAS_W, MARGIN, DashboardPlan, PlanVisual
+from core.design_layouts import nav_slots
+from core.planner import MARGIN, DashboardPlan, PlanVisual
 from core import tmdl
 
 TEMPLATES = Path(__file__).resolve().parent.parent / "templates" / "visuals"
@@ -208,7 +209,7 @@ def visual_rect(v: PlanVisual, item: MappingItem, box: DetectedBox | None) -> tu
         l = t = r = b = 6
     elif box.inset:
         l, t, r, b = box.inset
-        if v.role == "slicer":  # slicers need the full pill height for the dropdown
+        if v.role == "slicer" and t <= 12:  # pill slicers need the full pill height for the dropdown
             t = b = 0
     elif v.role == "kpi":
         # KPI cards: give the Power BI visual ample height below the background title
@@ -402,6 +403,8 @@ def visual_json(v: PlanVisual, item: MappingItem, box: DetectedBox | None, order
         else:
             if target in spec:
                 spec[target]["fontSize"] = font_size
+        if box is not None and box.value_color and not (val is not None and val.color) and target in spec:
+            spec[target]["color"] = box.value_color  # e.g. white numbers on gradient KPI cards
         if not aligned:
             spec.setdefault("categoryLabels", {})["show"] = show_title
         show_title = False
@@ -531,7 +534,7 @@ def nav_button_json(page_num: int, target_num: int, target_page_name: str, label
         fill_color = accent
         outline_color = accent
     else:
-        font_color = muted
+        font_color = muted  # fill is see-through below, so the design's own nav track shows
         font_family = "Segoe UI"
         fill_color = card
         outline_color = grid
@@ -562,7 +565,7 @@ def nav_button_json(page_num: int, target_num: int, target_page_name: str, label
                 "fill": [{"properties": {
                     "show": literal(True),
                     "fillColor": color(fill_color),
-                    "transparency": literal(0),
+                    "transparency": literal(0 if is_active else 100),
                 }}],
                 "outline": [{"properties": {
                     "show": literal(True),
@@ -650,32 +653,14 @@ def _report_files(inp: BuildInputs, root: str) -> dict[str, bytes]:
             curr_page_name = names[n - 1]
             pg = pages[n - 1]
             is_sidebar, sidebar_w = _is_sidebar_page(pg)
-            if is_sidebar:
-                btn_x = MARGIN
-                btn_w = max(160, sidebar_w - MARGIN)
-                btn_h = 36
-                btn_gap = 8
-                btn_start_y = 80
-            else:
-                btn_w, btn_h, btn_gap, btn_y = 92, 30, 8, 20
-                total_w = len(pages) * btn_w + (len(pages) - 1) * btn_gap
-                start_x = CANVAS_W - MARGIN - total_w
-
-            for t in range(1, len(pages) + 1):
+            # Same slots the DashPilot templates draw their nav track under (design_layouts.nav_slots).
+            slots = nav_slots(len(pages), sidebar_w if is_sidebar else 0)
+            for t, slot in enumerate(slots, 1):
                 target_page_name = names[t - 1]
                 label = pages[t - 1].plan.pages[0] if pages[t - 1].plan.pages else ("Overview" if t == 1 else f"Page {t}")
-                if is_sidebar:
-                    bx = btn_x
-                    by = btn_start_y + (t - 1) * (btn_h + btn_gap)
-                    bw, bh = btn_w, btn_h
-                else:
-                    bx = start_x + (t - 1) * (btn_w + btn_gap)
-                    by = btn_y
-                    bw, bh = btn_w, btn_h
-
                 btn_data = nav_button_json(
                     page_num=n, target_num=t, target_page_name=target_page_name,
-                    label=label, x=bx, y=by, w=bw, h=bh,
+                    label=label, x=slot.x, y=slot.y, w=slot.w, h=slot.h,
                     is_active=(t == n), tokens=tokens,
                 )
                 files[f"{d}/pages/{curr_page_name}/visuals/{btn_data['name']}/visual.json"] = _json(btn_data)

@@ -67,3 +67,19 @@ def test_verify_layout_grid_catches_overflow_and_overlap():
     bad_overlap = arrange(plan, "bento")
     bad_overlap.visuals[1].box = bad_overlap.visuals[0].box
     assert any("overlaps" in s for s in check(bad_overlap))
+
+
+def test_nav_slots_fit_the_header_or_the_rail():
+    from core.design_layouts import arrange as _arrange, nav_slots  # noqa: PLC0415
+
+    assert nav_slots(1) == []
+    top = nav_slots(2)
+    assert [(s.y, s.w, s.h) for s in top] == [(20, 92, 30)] * 2 and top[-1].x + top[-1].w == 1280 - 16
+    rail = nav_slots(2, rail_w=216)
+    assert all(s.x == 16 and s.x + s.w == 216 - 16 for s in rail) and rail[1].y > rail[0].y + rail[0].h
+    # Rail layouts keep the nav slots free of cards; top layouts keep them clear of the slicers.
+    plan = _make_plan().model_copy(update={"total_pages": 2})
+    for name, slots in (("dark_neon", rail), ("gradient_corporate", nav_slots(2, rail_w=236)), ("glass_light", top), ("command_center", top)):
+        arr = _arrange(plan, name)
+        for v in arr.visuals:
+            assert not any(v.box.x < s.x + s.w and s.x < v.box.x + v.box.w and v.box.y < s.y + s.h and s.y < v.box.y + v.box.h for s in slots), (name, v.id)

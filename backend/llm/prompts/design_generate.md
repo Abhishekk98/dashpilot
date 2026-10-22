@@ -17,6 +17,9 @@ DESIGN CONTRACT (the page is rejected automatically if any rule is broken):
 7. Do not move containers outside the canvas and do not make them overlap.
 8. Add no other text: no invented labels, codes, status lines, taglines or numbers. Only the dashboard title,
    its subtitle, the visual titles and the Key Insights lines may appear.
+9. Keep every `data-value-color` attribute (it is the colour Power BI uses for that KPI's number, so it must
+   stay readable on the card) and keep elements with `data-nav-track` where they are (Power BI's page
+   buttons sit on them).
 
 You MAY change: colours (stay with the brand palette), backgrounds, gradients, borders, radii, shadows,
 the header band, decorative shapes outside the containers, typography of titles, and spacing inside containers.

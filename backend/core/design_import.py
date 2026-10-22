@@ -71,6 +71,7 @@ class DetectedBox(BaseModel):
     # Content area inside the card as [left, top, right, bottom] insets in px (None = whole card).
     inset: list[int] | None = None
     value: ValueStyle | None = None  # the card's main number (KPI cards), as the design draws it
+    value_color: str | None = None  # data-value-color: colour for the KPI number (contract designs leave chart areas empty)
 
 
 class MappingItem(BaseModel):
@@ -365,7 +366,7 @@ _DETECT = r"""
       ...rel(el),
       title: el.getAttribute('data-title') || (titleEl ? own(titleEl) : ''),
       text: (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 300),
-      visual_id: el.getAttribute('data-visual-id'), type: el.getAttribute('data-type'),
+      visual_id: el.getAttribute('data-visual-id'), type: el.getAttribute('data-type'), value_color: el.getAttribute('data-value-color'),
       background: cs.backgroundColor, border: parseFloat(cs.borderTopWidth) > 0 ? cs.borderTopColor : null,
       radius: parseFloat(cs.borderTopLeftRadius) || 0,
       title_font: ts.fontFamily, title_color: ts.color, _el: el, _title: titleEl,
@@ -452,7 +453,7 @@ def extract(html: str, allow_scripts: bool = False) -> Extraction:
             background=css_hex(b["background"]), border=css_hex(b["border"]), radius=round(b["radius"]),
             title_font=_first_family(b["title_font"]), title_color=css_hex(b["title_color"]),
             inset=_inset(b, b.get("area")),
-            value=_value(b, b.get("value")),
+            value=_value(b, b.get("value")), value_color=css_hex(b.get("value_color")),
         ))
     palette = _palette(data, boxes)
     chart = data.get("chart") or {}

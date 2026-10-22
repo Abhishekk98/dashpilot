@@ -348,7 +348,7 @@ def test_build_api_flow(api, sample_bytes, monkeypatch, tmp_path):
     p_count = len(whole["pages"])
     nav_buttons = p_count * p_count if p_count > 1 else 0
     assert b["valid"] and b["data_folder"] == "D:\\Reports\\Shop\\" and b["visuals"] == len(whole["visuals"]) + slicers * (p_count - 1) + nav_buttons
-    assert {c["status"] for c in b["checks"]} == {"pass"}
+    assert {c["status"] for c in b["checks"]} == {"pass"}, [(c["id"], c.get("issues")) for c in b["checks"] if c["status"] != "pass"]
     z = api.get(f"/api/projects/{pid}/build/download")
     assert z.status_code == 200
     names = zipfile.ZipFile(io.BytesIO(z.content)).namelist()
@@ -445,3 +445,18 @@ def test_build_on_random_datasets(batch):
         assert not bad, f"seed {seed}: {bad}"
         ran += 1
     assert ran
+
+
+def test_kpi_number_takes_the_design_value_color():
+    from core.design_import import DetectedBox, MappingItem  # noqa: PLC0415
+    from core.pbip_builder import visual_json  # noqa: PLC0415
+    from core.planner import Box, PlanVisual  # noqa: PLC0415
+
+    v = PlanVisual(id="kpi_1", role="kpi", type="card", title="Revenue", measures=["Revenue"], box=Box(x=232, y=72, w=190, h=96))
+    item = MappingItem(visual_id="kpi_1", box_id="box_01", x=232, y=72, w=190, h=96, method="id")
+    tokens = {"text": "#0F172A", "card": "#FFFFFF", "muted": "#64748B", "grid": "#E2E8F0", "band": "#F8FAFC",
+              "accent": "#7C3AED", "value": "#0F172A", "value_font": "Segoe UI"}
+    plain = DetectedBox(id="box_01", x=232, y=72, w=190, h=96, title="Revenue")
+    white = plain.model_copy(update={"value_color": "#FFFFFF"})
+    color = lambda box: visual_json(v, item, box, 0, tokens)["visual"]["objects"]["labels"][0]["properties"]["color"]["solid"]["color"]["expr"]["Literal"]["Value"]  # noqa: E731
+    assert color(plain) == "'#0F172A'" and color(white) == "'#FFFFFF'"

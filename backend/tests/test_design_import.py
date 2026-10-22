@@ -224,7 +224,7 @@ def test_import_api_flow(api, sample_bytes):
     assert res.status_code == 200, res.text
     body = res.json()
     d = body["design"]
-    assert d["valid"] and d["source"] == "option_b" and "Glassmorphism Light" in d["source_name"]
+    assert d["valid"] and d["source"] == "option_b" and "Glass Tabs" in d["source_name"]
     assert {m["method"] for m in d["mapping"]} == {"id"} and len(d["mapping"]) == len(body["visuals"])
     png = api.get(f"/api/projects/{pid}/design/background.png")
     assert png.status_code == 200 and Image.open(io.BytesIO(png.content)).size == (1280, 720)

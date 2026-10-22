@@ -103,6 +103,21 @@ def _slicer_bar(slicers: list[PlanVisual], right: float, y: float, min_left: flo
     return x + G // 2 if slicers else right
 
 
+NAV_TOP_W, NAV_TOP_H, NAV_TOP_Y = 92, 30, 20  # page tabs top-right (the header row keeps 208px free)
+NAV_RAIL_H, NAV_RAIL_Y, NAV_GAP = 36, 80, 8  # page buttons stacked in a left rail, under the title
+
+
+def nav_slots(total_pages: int, rail_w: int = 0) -> list[Box]:
+    """Where the Power BI page-navigation buttons go (one per page; none for a single page).
+    Shared by the design templates (which draw the track behind them) and the PBIP builder."""
+    if total_pages < 2:
+        return []
+    if rail_w:
+        return [_b(M, NAV_RAIL_Y + i * (NAV_RAIL_H + NAV_GAP), rail_w - 2 * M, NAV_RAIL_H) for i in range(total_pages)]
+    x0 = CANVAS_W - M - (total_pages * NAV_TOP_W + (total_pages - 1) * NAV_GAP)
+    return [_b(x0 + i * (NAV_TOP_W + NAV_GAP), NAV_TOP_Y, NAV_TOP_W, NAV_TOP_H) for i in range(total_pages)]
+
+
 def _parts(visuals: list[PlanVisual]):
     vs = [v.model_copy(deep=True) for v in visuals]
     slicers = [v for v in vs if v.role == "slicer"]
@@ -358,9 +373,9 @@ def _gradient_corporate(visuals, is_multi: bool = False):
     header = _b(M, 16, rail - 2 * M, 52)
 
     sy = 76 + (88 if is_multi else 0) + 12
-    for s in slicers:
-        s.box = _b(M, sy, rail - 2 * M, 38)
-        sy += 38 + 10
+    for s in slicers:  # label above the dropdown, so the Date Range keeps room for both dates
+        s.box = _b(M, sy, rail - 2 * M, 56)
+        sy += 56 + 10
 
     x0 = rail + G
     w = CANVAS_W - M - x0
