@@ -94,6 +94,11 @@ def _all_pbi_titles(shop: BuildInputs) -> BuildInputs:
     return shop.__class__(**{**shop.__dict__, "mapping": flip(shop.mapping), "extra_pages": extra})
 
 
+def _is_extra(visual: dict) -> bool:
+    """KPI vs PY lines and sparklines (drawn inside a KPI card, not planned visuals)."""
+    return visual["position"]["z"] >= 20000
+
+
 def _visuals(files: dict[str, bytes]) -> list[dict]:
     return [json.loads(c) for p, c in files.items() if p.endswith("/visual.json")]
 
@@ -126,7 +131,7 @@ def test_build_structure_and_validation(shop):
     assert second["displayName"] == "Details" and "DashPilotBackground_p2.png" in json.dumps(second)
     assert files[f"{root}.Report/StaticResources/RegisteredResources/DashPilotBackground_p2.png"] == shop.extra_pages[0].background
     p2 = [json.loads(c) for p, c in files.items() if f"/pages/{page_name(2)}/visuals/" in p]
-    plan_p2 = [v for v in p2 if v["visual"]["visualType"] != "actionButton"]
+    plan_p2 = [v for v in p2 if v["visual"]["visualType"] != "actionButton" and not _is_extra(v)]
     assert len(plan_p2) == len(shop.extra_pages[0].plan.visuals)
     nav_p2 = [v for v in p2 if v["visual"]["visualType"] == "actionButton"]
     assert len(nav_p2) == 2
@@ -137,7 +142,7 @@ def test_build_structure_and_validation(shop):
 def test_visuals_follow_plan_and_mapping(shop):
     files = build(shop)
     visuals = {v["name"]: v for v in _visuals(files)}
-    plan_visuals = {k: v for k, v in visuals.items() if v["visual"]["visualType"] != "actionButton"}
+    plan_visuals = {k: v for k, v in visuals.items() if v["visual"]["visualType"] != "actionButton" and not _is_extra(v)}
     assert len(plan_visuals) == sum(len(pg.plan.visuals) for pg in shop.pages)
     nav_visuals = {k: v for k, v in visuals.items() if v["visual"]["visualType"] == "actionButton"}
     assert len(nav_visuals) == len(shop.pages) * len(shop.pages)
@@ -347,7 +352,9 @@ def test_build_api_flow(api, sample_bytes, monkeypatch, tmp_path):
     slicers = sum(v["role"] == "slicer" for v in whole["visuals"])
     p_count = len(whole["pages"])
     nav_buttons = p_count * p_count if p_count > 1 else 0
-    assert b["valid"] and b["data_folder"] == "D:\\Reports\\Shop\\" and b["visuals"] == len(whole["visuals"]) + slicers * (p_count - 1) + nav_buttons
+    kpi_extras = 2 * sum(v["role"] == "kpi" for v in whole["visuals"])  # vs PY line + sparkline per KPI card
+    assert b["valid"] and b["data_folder"] == "D:\\Reports\\Shop\\"
+    assert b["visuals"] == len(whole["visuals"]) + slicers * (p_count - 1) + nav_buttons + kpi_extras
     assert {c["status"] for c in b["checks"]} == {"pass"}, [(c["id"], c.get("issues")) for c in b["checks"] if c["status"] != "pass"]
     z = api.get(f"/api/projects/{pid}/build/download")
     assert z.status_code == 200
@@ -460,3 +467,34 @@ def test_kpi_number_takes_the_design_value_color():
     white = plain.model_copy(update={"value_color": "#FFFFFF"})
     color = lambda box: visual_json(v, item, box, 0, tokens)["visual"]["objects"]["labels"][0]["properties"]["color"]["solid"]["color"]["expr"]["Literal"]["Value"]  # noqa: E731
     assert color(plain) == "'#0F172A'" and color(white) == "'#FFFFFF'"
+
+
+def test_kpi_extras_data_bars_subtitles_and_indian_units(shop):
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    from core.pbip_builder import _indian, _kpi_display_dax, kpi_delta_color_name, kpi_delta_name  # noqa: PLC0415
+
+    files = build(shop)
+    root = folder_name(shop.project_name)
+    measures = files[f"{root}.SemanticModel/definition/tables/_Measures.tmdl"].decode()
+    kpi = next(v for v in shop.plan.visuals if v.role == "kpi")
+    assert kpi_delta_name(kpi.measures[0]) in measures and "SAMEPERIODLASTYEAR" in measures and '" MoM"' in measures
+    visuals = _visuals(files)
+    delta = next(v for v in visuals if _is_extra(v) and v["visual"]["visualType"] == "card")
+    colour = delta["visual"]["objects"]["labels"][0]["properties"]["color"]["solid"]["color"]["expr"]
+    assert colour["Measure"]["Property"] == kpi_delta_color_name(kpi.measures[0])
+    spark = next(v for v in visuals if _is_extra(v) and v["visual"]["visualType"] == "areaChart")
+    assert spark["visual"]["objects"]["categoryAxis"][0]["properties"]["show"]["expr"]["Literal"]["Value"] == "false"
+    # The KPI value, its vs PY line and the sparkline share the card without overlapping.
+    checks = validate(files)
+    assert all(c.status == "pass" for c in checks), [(c.id, c.issues) for c in checks if c.status != "pass"]
+    table = next(v for v in visuals if v["visual"]["visualType"] == "tableEx")
+    assert "dataBars" in table["visual"]["objects"]["columnFormatting"][0]["properties"]
+    bar = next(v for v in visuals if v["visual"]["visualType"] == "clusteredBarChart")
+    title = bar["visual"]["visualContainerObjects"]["title"][0]["properties"]
+    assert title["show"]["expr"]["Literal"]["Value"] == "true" and title["text"]["expr"]["Measure"]["Property"].endswith("(subtitle)")
+
+    rupees = SimpleNamespace(format_string="#,##0", expression="SUM('Orders'[Item_Subtotal_INR])")
+    assert _indian(rupees) and not _indian(SimpleNamespace(format_string="#,##0", expression="COUNTROWS('Orders')"))
+    dax = _kpi_display_dax("GMV", "#,##0", indian=True)
+    assert '"Cr"' in dax and '"L"' in dax and "₹" in dax and '"M"' not in dax

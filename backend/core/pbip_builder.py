@@ -258,37 +258,123 @@ def kpi_display_name(measure: str) -> str:
     return f"{measure} (KPI)"
 
 
-def _kpi_display_dax(measure: str, fmt: str) -> str:
-    """The value as the design shows it (compact like Power BI's auto units), as text: the multi-row card
-    that draws left/right-aligned KPIs has no display-units option of its own. Percentages and values
-    under 10,000 keep the measure's own format; larger ones get K/M/B with 2 decimals."""
-    ref = "[" + measure.replace("]", "]]") + "]"
+def _ref(measure: str) -> str:
+    return "[" + measure.replace("]", "]]") + "]"
+
+
+def _indian(m) -> bool:
+    """Rupee amounts get Indian units (K / L / Cr)."""
+    text = f"{m.format_string or ''} {getattr(m, 'expression', '')}"
+    return "₹" in text or bool(re.search(r"(?i)(\b|_)(inr|rupees?)(\b|_)", text))
+
+
+def _kpi_display_dax(measure: str, fmt: str, indian: bool = False) -> str:
+    """The KPI value as text, compact like Power BI's auto units (K/M/B, or K/L/Cr for rupees).
+    Percentages and values under 10,000 keep the measure's own format."""
+    ref = _ref(measure)
     own = fmt.replace('"', '""')
     if "%" in fmt:
         return f'VAR v = {ref} RETURN IF(ISBLANK(v), BLANK(), FORMAT(v, "{own}"))'
     first = fmt.split(";")[0]
     prefix = first[: len(first) - len(first.lstrip("\\$€£₹¥ "))]  # currency symbol in front, if any
+    if indian and not prefix:
+        prefix = "₹"
     scaled = (prefix + "#,0.00").replace('"', '""')
-    return (f'VAR v = {ref} VAR a = ABS(v) RETURN IF(ISBLANK(v), BLANK(), SWITCH(TRUE(), '
-            f'a >= 1E9, FORMAT(v / 1E9, "{scaled}") & "B", a >= 1E6, FORMAT(v / 1E6, "{scaled}") & "M", '
-            f'a >= 1E4, FORMAT(v / 1E3, "{scaled}") & "K", FORMAT(v, "{own}")))')
+    small = (prefix + first.lstrip("\\$€£₹¥ ")).replace('"', '""') if prefix else own
+    units = ([("1E7", "Cr"), ("1E5", "L"), ("1E3", "K")] if indian else [("1E9", "B"), ("1E6", "M"), ("1E3", "K")])
+    steps = ", ".join(f'a >= {(n if u != "K" else "1E4")}, FORMAT(v / {n}, "{scaled}") & "{u}"' for n, u in units)
+    return f'VAR v = {ref} VAR a = ABS(v) RETURN IF(ISBLANK(v), BLANK(), SWITCH(TRUE(), {steps}, FORMAT(v, "{small}")))'
+
+
+# Measures where a rise is bad news (the vs PY arrow turns red when they go up).
+LOWER_IS_BETTER = ("fraud", "cancel", "churn", "fail", "reversal", "return", "refund", "delay", "time", "cost",
+                   "complaint", "defect", "error", "bounce", "late", "discount", "loss", "expense")
+
+
+def kpi_delta_name(measure: str) -> str:
+    return f"{measure} (vs)"
+
+
+def kpi_delta_color_name(measure: str) -> str:
+    return f"{measure} (vs colour)"
+
+
+def subtitle_name(v: PlanVisual) -> str:
+    return f"{v.title} (subtitle)"
+
+
+def _delta_vars(measure: str) -> str:
+    """Change vs the same period last year; when there is no previous year in the data, the latest
+    month vs the month before (labelled MoM)."""
+    m, d = _ref(measure), f"'{tmdl.DATE_TABLE}'[Date]"
+    return (f"VAR cur = {m} VAR py = CALCULATE({m}, SAMEPERIODLASTYEAR({d})) "
+            f"VAR usePY = NOT ISBLANK(cur) && NOT ISBLANK(py) "
+            f"VAR lastDay = MAXX(FILTER(VALUES({d}), NOT ISBLANK({m})), {d}) "
+            f"VAR cm = CALCULATE({m}, DATESBETWEEN({d}, EOMONTH(lastDay, -1) + 1, lastDay)) "
+            f"VAR pm = CALCULATE({m}, DATESBETWEEN({d}, EOMONTH(lastDay, -2) + 1, EOMONTH(lastDay, -1))) "
+            f"VAR chg = IF(usePY, DIVIDE(cur - py, ABS(py)), IF(ISBLANK(lastDay) || ISBLANK(cm), BLANK(), DIVIDE(cm - pm, ABS(pm)))) ")
+
+
+def _delta_dax(measure: str) -> tuple[str, str]:
+    """(text like '▲ 12.4% vs PY', its colour: green when the change is good news, red when bad)."""
+    lower = any(w in measure.lower() for w in LOWER_IS_BETTER)
+    text = (_delta_vars(measure) + 'RETURN IF(ISBLANK(chg), "", IF(chg >= 0, "▲ ", "▼ ") & FORMAT(ABS(chg), "0.0%") '
+            '& IF(usePY, " vs PY", " MoM"))')
+    good = "chg <= 0" if lower else "chg >= 0"
+    colour = _delta_vars(measure) + f'RETURN IF(ISBLANK(chg), "#94A3B8", IF({good}, "#22C55E", "#EF4444"))'
+    return text, colour
+
+
+SUBTITLE_TYPES = ("clustered_bar", "clustered_column", "stacked_bar", "stacked_column", "donut", "pie", "line", "area", "funnel")
+
+
+def has_subtitle(v: PlanVisual, item: MappingItem | None) -> bool:
+    """Charts with one category and a measure get a dynamic one-line insight under the design title."""
+    return (v.role == "chart" and v.type in SUBTITLE_TYPES and bool(v.dimension) and bool(v.measures)
+            and item is not None and item.placed and not item.pbi_title)
+
+
+def _subtitle_dax(v: PlanVisual) -> str:
+    table, col = column_ref(v.dimension or "")
+    c, m = f"'{table}'[{col}]", _ref(v.measures[0])
+    trend = table == tmdl.DATE_TABLE and col.lower() in ("year month", "month", "date", "month name")
+    tail = (" was the peak" if trend else " has the largest share" if v.type in ("donut", "pie")
+            else f" has the highest {v.measures[0]}").replace('"', '""')
+    return (f"VAR t = TOPN(1, FILTER(VALUES({c}), NOT ISBLANK({m})), {m}, DESC) VAR top = MAXX(t, {c}) "
+            f'RETURN IF(ISBLANK(top), "", top & "{tail}")')
+
+
+def kpi_extras(inp: BuildInputs) -> bool:
+    """vs PY deltas and sparklines need the date table."""
+    return inp.model.date_table.enabled
 
 
 def kpi_display_measures(inp: BuildInputs) -> list:
-    """Hidden helper measures for the KPI cards drawn left/right-aligned (one per measure used)."""
+    """Hidden helper measures: every KPI's compact value, its vs PY text and colour (with a date table),
+    and the dynamic subtitle of each chart."""
     from types import SimpleNamespace  # noqa: PLC0415
+
+    def helper(name: str, expression: str, description: str):
+        return SimpleNamespace(name=name, expression=expression, format_string="", folder=KPI_FOLDER, description=description, hidden=True)
 
     by_name = {m.name: m for m in inp.measures}
     out, seen = [], set()
-    placed = [(v, {m.visual_id: m for m in pg.mapping}.get(v.id), {b.id: b for b in pg.boxes}) for pg in inp.pages for v in pg.plan.visuals]
-    for v, item, boxes in placed:
-        val = kpi_value(v, item, boxes.get(item.box_id or "")) if item and item.placed else None
-        if val is None or val.align == "center" or not v.measures or v.measures[0] in seen or v.measures[0] not in by_name:
-            continue
-        m = by_name[v.measures[0]]
-        seen.add(m.name)
-        out.append(SimpleNamespace(name=kpi_display_name(m.name), expression=_kpi_display_dax(m.name, m.format_string or "#,0.##"), format_string="",
-                                   folder=KPI_FOLDER, description=f"{m.name} as the dashboard's KPI card shows it (compact).", hidden=True))
+    for pg in inp.pages:
+        mapping = {m.visual_id: m for m in pg.mapping}
+        for v in pg.plan.visuals:
+            item = mapping.get(v.id)
+            if v.role == "kpi" and item and item.placed and v.measures and v.measures[0] in by_name and v.measures[0] not in seen:
+                m = by_name[v.measures[0]]
+                seen.add(m.name)
+                out.append(helper(kpi_display_name(m.name), _kpi_display_dax(m.name, m.format_string or "#,0.##", _indian(m)),
+                                  f"{m.name} as the dashboard's KPI card shows it (compact)."))
+                if kpi_extras(inp):
+                    text, colour = _delta_dax(m.name)
+                    out.append(helper(kpi_delta_name(m.name), text, f"{m.name}: change vs PY (or MoM) for the KPI card."))
+                    out.append(helper(kpi_delta_color_name(m.name), colour, f"{m.name}: colour of the KPI card's change."))
+            elif has_subtitle(v, item) and v.measures[0] in by_name and subtitle_name(v) not in seen:
+                seen.add(subtitle_name(v))
+                out.append(helper(subtitle_name(v), _subtitle_dax(v), f"One-line insight under '{v.title}'."))
     return out
 
 
@@ -371,11 +457,14 @@ def _filter_exclude_unknown(field_str: str) -> dict:
 
 
 def visual_json(v: PlanVisual, item: MappingItem, box: DetectedBox | None, order: int, tokens: dict[str, str], page: int = 1,
-                sync: bool = False) -> dict:
+                sync: bool = False, rect: tuple[int, int, int, int] | None = None, subtitle: bool = False, compact: bool = False) -> dict:
+    """`rect` overrides the position (a KPI value sharing its card with the vs PY line and sparkline);
+    `subtitle` shows the chart's dynamic insight measure as a small Power BI title under the design title;
+    `compact` shows a KPI through its "(KPI)" helper measure (K/M/B or K/L/Cr)."""
     val = kpi_value(v, item, box)
     aligned = val is not None and val.align != "center"
     tpl = template("kpi_left" if aligned else v.type)
-    x, y, w, h = visual_rect(v, item, box)
+    x, y, w, h = rect or visual_rect(v, item, box)
     spec = _fill(tpl["objects"], tokens)
     show_title = item.pbi_title
     if v.role == "kpi":
@@ -418,9 +507,11 @@ def visual_json(v: PlanVisual, item: MappingItem, box: DetectedBox | None, order
     if len(v.measures) > 1 and "legend" in spec:
         spec["legend"]["show"] = True
     visual: dict = {"visualType": tpl["visualType"]}
-    query = _query(v.model_copy(update={"measures": [kpi_display_name(v.measures[0])]}) if aligned and v.measures else v, tpl)
+    # KPI cards show the compact text value (K/M/B or K/L/Cr), named like the KPI.
+    compact = v.role == "kpi" and bool(v.measures) and (compact or aligned)
+    query = _query(v.model_copy(update={"measures": [kpi_display_name(v.measures[0])]}) if compact else v, tpl)
     if query:
-        if v.role == "slicer":
+        if v.role == "slicer" or compact:
             for role in query["queryState"].values():
                 for p in role["projections"]:
                     p["displayName"] = v.title
@@ -443,6 +534,14 @@ def visual_json(v: PlanVisual, item: MappingItem, box: DetectedBox | None, order
             {"textRuns": [{"value": "• " + line, "textStyle": {"fontFamily": "Segoe UI", "fontSize": "10pt", "color": tokens["text"]}}]}
             for line in (deduped or raw_lines)[:3]
         ]}}]
+    if v.type in ("table", "matrix") and v.measures and query:
+        # Data bars on every number column (the design's accent colour).
+        obj["columnFormatting"] = [
+            {"properties": {"dataBars": {"positiveColor": color(tokens["accent"]), "negativeColor": color("#EF4444"),
+                                         "axisColor": color(tokens["grid"]), "reverseDirection": literal(False), "hideText": literal(False)}},
+             "selector": {"metadata": _measure(m)[1]}}
+            for m in v.measures[: tpl["max_measures"]]
+        ]
     if obj:
         visual["objects"] = obj
     container = {
@@ -453,6 +552,11 @@ def visual_json(v: PlanVisual, item: MappingItem, box: DetectedBox | None, order
         "title": {"show": show_title, **({"text": v.title, "fontColor": tokens["text"], "fontFamily": "Segoe UI Semibold", "fontSize": 11} if show_title else {})},
     }
     visual["visualContainerObjects"] = objects(container)
+    if subtitle and not show_title:
+        visual["visualContainerObjects"]["title"] = [{"properties": {
+            "show": literal(True), "text": {"expr": _measure(subtitle_name(v))[0]}, "fontColor": color(tokens["muted"]),
+            "fontFamily": literal("Segoe UI"), "fontSize": literal(9), "alignment": literal("left"),
+        }}]
     if v.role == "slicer" and sync:
         visual["syncGroup"] = {"groupName": _id("sync", v.id), "fieldChanges": True, "filterChanges": True}
     visual["drillFilterOtherVisuals"] = True
@@ -480,6 +584,69 @@ def visual_json(v: PlanVisual, item: MappingItem, box: DetectedBox | None, order
     if filters:
         out_visual["filterConfig"] = {"filters": filters}
     return out_visual
+
+
+EXTRA_Z = 20000  # KPI vs PY lines and sparklines sit above everything else
+
+
+def kpi_split(rect: tuple[int, int, int, int], extras: bool) -> tuple[tuple, tuple | None, tuple | None]:
+    """(value, vs PY line, sparkline) inside a KPI card's content area; extras only when they fit."""
+    x, y, w, h = rect
+    if not extras or h < 48 or w < 110:
+        return rect, None, None
+    line_h = 16
+    spark_w = round(w * 0.38) if w >= 150 else 0
+    left_w = w - spark_w - (6 if spark_w else 0)
+    value = (x, y, left_w, h - line_h - 2)
+    delta = (x, y + h - line_h, left_w, line_h)
+    spark = (x + w - spark_w, y + 4, spark_w, h - 6) if spark_w else None
+    return value, delta, spark
+
+
+def _bare_container() -> dict:
+    return objects({"background": {"show": False}, "border": {"show": False}, "dropShadow": {"show": False},
+                    "visualHeader": {"show": False}, "title": {"show": False}})
+
+
+def kpi_delta_json(v: PlanVisual, rect: tuple, order: int, page: int) -> dict:
+    x, y, w, h = rect
+    m = v.measures[0]
+    colour = {"solid": {"color": {"expr": _measure(kpi_delta_color_name(m))[0]}}}
+    return {
+        "$schema": SCHEMAS["visual"],
+        "name": _id("kpi_delta", f"p{page}", v.id),
+        "position": {"x": x, "y": y, "z": EXTRA_Z + order * 10, "height": h, "width": w, "tabOrder": EXTRA_Z + order * 10},
+        "visual": {
+            "visualType": "card",
+            "query": {"queryState": {"Values": {"projections": [{**_projection(_measure(kpi_delta_name(m))), "displayName": f"{v.title} vs PY"}]}}},
+            "objects": {"labels": [{"properties": {"color": colour, "fontSize": literal(8), "fontFamily": literal("Segoe UI Semibold")}}],
+                        "categoryLabels": [{"properties": {"show": literal(False)}}]},
+            "visualContainerObjects": _bare_container(),
+            "drillFilterOtherVisuals": True,
+        },
+    }
+
+
+def kpi_spark_json(v: PlanVisual, rect: tuple, order: int, page: int, line_color: str) -> dict:
+    x, y, w, h = rect
+    month = f"{tmdl.DATE_TABLE}[Year Month]"
+    query = {"queryState": {"Category": {"projections": [_projection(_column(month))]},
+                            "Y": {"projections": [_projection(_measure(v.measures[0]))]}},
+             "sortDefinition": {"sort": [{"field": _column(month)[0], "direction": "Ascending"}], "isDefaultSort": False}}
+    return {
+        "$schema": SCHEMAS["visual"],
+        "name": _id("kpi_spark", f"p{page}", v.id),
+        "position": {"x": x, "y": y, "z": EXTRA_Z + order * 10 + 1, "height": h, "width": w, "tabOrder": EXTRA_Z + order * 10 + 1},
+        "visual": {
+            "visualType": "areaChart",
+            "query": query,
+            "objects": objects({"categoryAxis": {"show": False}, "valueAxis": {"show": False, "gridlineShow": False},
+                                "legend": {"show": False}, "labels": {"show": False}, "dataPoint": {"fill": line_color}}),
+            "visualContainerObjects": _bare_container(),
+            "drillFilterOtherVisuals": True,
+        },
+        "filterConfig": {"filters": [_filter_no_blank_date(month)]},
+    }
 
 
 # --- report -------------------------------------------------------------------------------------
@@ -634,6 +801,7 @@ def _report_files(inp: BuildInputs, root: str) -> dict[str, bytes]:
         f"{d}/pages/pages.json": _json({"$schema": SCHEMAS["pages"], "pageOrder": names, "activePageName": names[0]}),
         f"{root}/StaticResources/RegisteredResources/{THEME_FILE}": _json(inp.theme),
     }
+    helpers = {h.name for h in kpi_display_measures(inp)}
     for n, pg in enumerate(pages, 1):
         # Page 1 is named after the dashboard; further pages by their plan name ("Details").
         display = inp.plan.title if n == 1 else (pg.plan.pages[0] if pg.plan.pages else f"Page {n}")
@@ -645,8 +813,20 @@ def _report_files(inp: BuildInputs, root: str) -> dict[str, bytes]:
             item = mapping.get(v.id)
             if item is None or not item.placed:
                 continue
-            data = visual_json(v, item, boxes.get(item.box_id or ""), order, tokens, n, sync=len(pages) > 1)
-            files[f"{d}/pages/{names[n - 1]}/visuals/{data['name']}/visual.json"] = _json(data)
+            box = boxes.get(item.box_id or "")
+            extra: list[dict] = []
+            rect = None
+            if v.role == "kpi" and v.measures and not item.pbi_title:
+                rect, delta, spark = kpi_split(visual_rect(v, item, box), kpi_delta_name(v.measures[0]) in helpers)
+                if delta:
+                    extra.append(kpi_delta_json(v, delta, order, n))
+                if spark:
+                    extra.append(kpi_spark_json(v, spark, order, n, (box.value_color if box and box.value_color else tokens["accent"])))
+            data = visual_json(v, item, box, order, tokens, n, sync=len(pages) > 1, rect=rect,
+                               subtitle=subtitle_name(v) in helpers and has_subtitle(v, item),
+                               compact=bool(v.measures) and kpi_display_name(v.measures[0]) in helpers)
+            for out in (data, *extra):
+                files[f"{d}/pages/{names[n - 1]}/visuals/{out['name']}/visual.json"] = _json(out)
 
     if len(pages) > 1:
         for n in range(1, len(pages) + 1):
