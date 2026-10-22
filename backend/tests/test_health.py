@@ -21,3 +21,15 @@ def test_cors_allows_frontend_origin():
         headers={"Origin": "http://localhost:3000", "Access-Control-Request-Method": "GET"},
     )
     assert res.headers.get("access-control-allow-origin") == "http://localhost:3000"
+
+
+def test_system_info_ok():
+    res = client.get("/api/system/info")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["app"] == "DashPilot API"
+    assert "python_version" in body
+    assert "platform" in body
+    assert "storage_dir" in body
+    assert "powerbi_desktop_installed" in body
+

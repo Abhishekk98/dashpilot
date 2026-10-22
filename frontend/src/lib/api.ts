@@ -11,6 +11,29 @@ export interface HealthResponse {
   llm_configured: boolean;
 }
 
+export interface SystemInfoResponse {
+  app: string;
+  version: string;
+  python_version: string;
+  platform: string;
+  storage_dir: string;
+  max_upload_mb: number;
+  llm_provider: "gemini" | "claude";
+  llm_model: string;
+  llm_configured: boolean;
+  llm_max_retries: number;
+  llm_timeout_seconds: number;
+  powerbi_desktop_installed: boolean;
+  powerbi_desktop_path: string | null;
+}
+
+export interface LLMTestResponse {
+  provider: string;
+  model: string;
+  response: string;
+  latency_ms: number;
+}
+
 export interface TableRef {
   name: string;
   sheet: string | null;
@@ -707,6 +730,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function fetchHealth(signal?: AbortSignal): Promise<HealthResponse> {
   return request("/api/health", { signal });
+}
+
+export function fetchSystemInfo(signal?: AbortSignal): Promise<SystemInfoResponse> {
+  return request("/api/system/info", { signal });
+}
+
+export function testLLM(): Promise<LLMTestResponse> {
+  return request("/api/llm/test");
 }
 
 export function listProjects(): Promise<ProjectSummary[]> {
