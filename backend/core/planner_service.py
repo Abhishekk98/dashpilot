@@ -9,8 +9,6 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from core import design_option_c as option_c
-
 from core.context_service import get_context
 from core.dax import StoredMeasures, build_plan as build_measures
 from core.dax_service import FILE as MEASURES_FILE
@@ -31,13 +29,13 @@ class PlanError(ValueError):
 
 
 class DesignState(BaseModel):
-    variants: list[DesignVariant] = []  # Option B variants (Option C keeps its own in design/option_c.json)
+    variants: list[DesignVariant] = []  # Option B variants
     selected: str | None = None
-    selected_method: Literal["A", "B", "C"] | None = None
-    selected_label: str | None = None  # e.g. "Option C · Close to Reference" (Design Import shows it)
+    selected_method: Literal["A", "B"] | None = None
+    selected_label: str | None = None  # e.g. "Option B · Dark Neon" (Design Import shows it)
     plan_signature: str | None = None
     stale: bool = False  # the plan changed after these variants were generated
-    selected_stale: bool = False  # the selected design (B or C) no longer matches the plan
+    selected_stale: bool = False  # the selected design no longer matches the plan
     generated_at: datetime | None = None
 
 
@@ -59,9 +57,7 @@ def _inputs(store: ProjectStore, project: Project, llm: LLMProvider | None):
 def _design(store: ProjectStore, project: Project, plan: DashboardPlan) -> DesignState:
     state = DesignState.model_validate(store.read_json(project.id, DESIGN_FILE))
     state.stale = bool(state.variants) and state.plan_signature != plan_signature(plan)
-    if state.selected and state.selected_method == "C":
-        state.selected_stale = option_c.get_state(store, project).stale
-    elif state.selected and state.selected_method == "A":
+    if state.selected and state.selected_method == "A":
         state.selected_stale = False  # a Stitch design is re-matched to the plan by Design Import
     elif state.selected:
         state.selected_stale = state.stale
@@ -112,9 +108,8 @@ def generate_design(store: ProjectStore, project: Project, llm: LLMProvider | No
     context = get_context(store, project)
     variants = generate_variants(plan, context, llm)
     previous = DesignState.model_validate(store.read_json(project.id, DESIGN_FILE))
-    keep = previous.selected_method == "C"  # an Option C selection is not affected by new B variants
     state = DesignState(variants=variants, plan_signature=plan_signature(plan), generated_at=datetime.now(timezone.utc),
-                        **({"selected": previous.selected, "selected_method": "C", "selected_label": previous.selected_label} if keep else {}))
+                        **({"selected": previous.selected, "selected_method": previous.selected_method, "selected_label": previous.selected_label} if previous.selected else {}))
     store.write_json(project.id, DESIGN_FILE, state.model_dump(mode="json", exclude={"stale", "selected_stale"}))
     state = _design(store, project, plan)
     ai = sum(v.source == "ai" for v in variants)
@@ -135,12 +130,10 @@ def select_variant(store: ProjectStore, project: Project, llm: LLMProvider | Non
         chosen = DesignVariant(id=variant_id, label=upload.label, html=html, source="template")
         state.selected, state.selected_method, state.selected_label = variant_id, "A", upload.label
     else:
-        method = "C" if variant_id.startswith("reference_") else "B"
-        pool = option_c.get_state(store, project).variants if method == "C" else state.variants
-        chosen = next((v for v in pool if v.id == variant_id), None)
+        chosen = next((v for v in state.variants if v.id == variant_id), None)
         if chosen is None:
             raise PlanError(f"Unknown design variant {variant_id}; generate the variants first.")
-        state.selected, state.selected_method, state.selected_label = variant_id, method, f"Option {method} · {chosen.label}"
+        state.selected, state.selected_method, state.selected_label = variant_id, "B", f"Option B · {chosen.label}"
     store.write_json(project.id, DESIGN_FILE, state.model_dump(mode="json", exclude={"stale", "selected_stale"}))
     state = _design(store, project, response.plan)
     # The chosen pages are what Design Import (Step 8) reads: selected.html, selected_p2.html, ...

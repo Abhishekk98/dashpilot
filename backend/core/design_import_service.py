@@ -39,7 +39,7 @@ class ImportError_(ValueError):
 
 
 class DesignImport(BaseModel):
-    source: Literal["option_a", "option_b", "option_c", "upload"]
+    source: Literal["option_a", "option_b", "upload"]
     source_name: str
     source_hash: str
     plan_signature: str
@@ -124,7 +124,7 @@ def _selected(store: ProjectStore, project: Project, page: int = 1) -> tuple[str
 
 
 def _method(label: str) -> str:
-    return {"Option A": "option_a", "Option C": "option_c"}.get(label[:8], "option_b")
+    return "option_a" if label.startswith("Option A") else "option_b"
 
 
 STITCH_SCREEN = "stitch/screen.png"  # Option A: Stitch's own screenshot from the export zip (page n: stitch/p{n}/screen.png)

@@ -24,17 +24,15 @@ import {
 } from "@/lib/api";
 
 import { OptionAPanel } from "./OptionAPanel";
-import { OptionCPanel } from "./OptionCPanel";
 import { PlanWireframe } from "./PlanWireframe";
 import { DesignFrame, ScaledCanvas } from "./ScaledCanvas";
 import { type Draft, VisualEditor } from "./VisualEditor";
 
-type Method = "A" | "B" | "C";
+type Method = "A" | "B";
 
 const METHODS: { key: Method; icon: string; title: string; text: string; available: boolean }[] = [
-  { key: "B", icon: "auto_awesome", title: "Design with DashPilot (AI)", text: "Three styled 1280×720 designs from your plan and brand, each checked against the design contract.", available: true },
-  { key: "C", icon: "image_search", title: "Design from Reference Image", text: "Upload a dashboard you like; DashPilot takes its style (not its layout) and designs your KPIs in it.", available: true },
-  { key: "A", icon: "draw", title: "Design with Google Stitch", text: "Copy a ready-made Stitch prompt, design in Stitch and upload the export; Power BI gets exactly that design.", available: true },
+  { key: "B", icon: "auto_awesome", title: "DashPilot Built-in Premium Designs", text: "Curated futuristic 1280×720 layouts with distinct architectures, custom palettes, and full contract adherence.", available: true },
+  { key: "A", icon: "draw", title: "Design with Google Stitch", text: "Copy an AI-optimized Stitch prompt, design in Stitch and upload the export; Power BI gets exactly that design.", available: true },
 ];
 
 const LIMITS = { kpi: 5, chart: 6, slicer: 3 } as const;
@@ -367,17 +365,6 @@ export function DesignWorkspace() {
                 blocked={dirty ? "Save your plan changes first" : !plan.valid ? "Fix the plan issues first" : null}
                 selecting={busy === "select"}
                 onSelect={() => run("select", () => selectDesign(projectId, "stitch"))}
-              />
-            )}
-
-            {method === "C" && (
-              <OptionCPanel
-                projectId={projectId}
-                design={design}
-                blocked={dirty ? "Save your plan changes first" : !plan.valid ? "Fix the plan issues first" : null}
-                selecting={busy === "select"}
-                onSelect={(id) => run("select", () => selectDesign(projectId, id))}
-                onPreview={setPreview}
               />
             )}
 
