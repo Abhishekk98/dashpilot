@@ -88,9 +88,9 @@ def test_prompt_has_exact_layout_and_rules(plan):
     text = p.prompt
     for v in plan.visuals:
         assert f'"{v.title}"' in text
-    assert "1280x720 Power BI canvas" in text and "EXACTLY as written" in text and "Segoe UI" in text
+    assert "1280x720 Power BI canvas" in text and "exactly as written" in text and "Segoe UI" in text
     assert "Dark Futuristic" in text and "sidebar navigation" in text and ctx.palette.accent in text
-    assert "KPI CARDS" in text and "CHARTS & VISUALIZATIONS" in text and "AI INSIGHTS PANEL" in text
+    assert "KPI CARDS" in text and "CHARTS" in text and "INSIGHTS PANEL" in text and "No other text" in text
     assert {s["id"] for s in p.styles} >= {"dark_futuristic", "light_elegant", "glassmorphism", "minimal_corporate", "neon_tech"}
 
 
@@ -214,11 +214,12 @@ def test_option_a_flow_and_fidelity_gate(api, sample_bytes):
     api.post(f"/api/projects/{pid}/design/stitch", files={"file": ("s.zip", _zip({"code.html": html.encode(), "screen.png": _png(shot)}), "application/zip")})
     api.post(f"/api/projects/{pid}/design/select", json={"id": "stitch"})
     status = api.get(f"/api/projects/{pid}/build").json()
-    assert not status["ready"] and "matches the design" in status["blockers"][0]
-    assert api.post(f"/api/projects/{pid}/build", json={}).status_code == 422
+    # A low fidelity is a warning: the Stitch design is still used for the build.
+    assert status["ready"] and "matches the design" in status["warnings"][0]
+    assert api.post(f"/api/projects/{pid}/build", json={}).json()["build"]["valid"]
     over = api.put(f"/api/projects/{pid}/design/import/fidelity-override", json={"override": True}).json()
     assert over["design"]["fidelity_override"] and not over["design"]["fidelity"]["passed"]
-    assert api.post(f"/api/projects/{pid}/build", json={}).json()["build"]["valid"]
+    assert api.get(f"/api/projects/{pid}/build").json()["warnings"] == []
 
 
 # --- fuzz -------------------------------------------------------------------------------------------
@@ -242,3 +243,19 @@ def test_stitch_like_pages_on_random_datasets(batch):
         assert {m.method for m in mapping} == {"title"} and report.passed, f"seed {seed}: {report}"
         ran += 1
     assert ran
+
+
+@needs_browser
+def test_filter_names_above_dropdowns_map_to_the_dropdowns(plan):
+    from core.design_import import extract, match, named_by_label, validate_mapping  # noqa: PLC0415
+
+    page = page_plan(plan, 1)
+    found = extract(stitch_export(page, labels_above=True), allow_scripts=True)
+    mapping, _ = match(page, found.boxes)
+    boxes = {b.id: b for b in found.boxes}
+    for v in (v for v in page.visuals if v.role == "slicer"):
+        m = next(m for m in mapping if m.visual_id == v.id)
+        box = boxes[m.box_id]
+        assert m.method == "title" and box.title == "All values" and abs(box.y - (v.box.y + 4)) <= 1, (v.title, box)
+        assert named_by_label(v.title, box)  # the dummy "All values" goes, the label above stays
+    assert validate_mapping(page, mapping, found.boxes) == []

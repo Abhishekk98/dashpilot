@@ -72,6 +72,7 @@ class DetectedBox(BaseModel):
     inset: list[int] | None = None
     value: ValueStyle | None = None  # the card's main number (KPI cards), as the design draws it
     value_color: str | None = None  # data-value-color: colour for the KPI number (contract designs leave chart areas empty)
+    label: str = ""  # short text drawn right above a small card (a filter's name over its dropdown)
 
 
 class MappingItem(BaseModel):
@@ -354,6 +355,22 @@ _DETECT = r"""
     return best;
   };
 
+  // A short text right above a small card (Stitch draws "Date Range" over its filter dropdowns).
+  const shortTexts = [...canvas.querySelectorAll('*')].filter(t => !t.closest('svg') && own(t) && own(t).length <= 60 && shown(t));
+  const labelAbove = el => {
+    const b = el.getBoundingClientRect();
+    if (b.height > 80) return '';
+    let best = null, gap = 1e9;
+    for (const t of shortTexts) {
+      if (el.contains(t)) continue;
+      const r = t.getBoundingClientRect();
+      const overlapW = Math.min(r.right, b.right) - Math.max(r.left, b.left);
+      const g = b.top - r.bottom;
+      if (g >= -2 && g <= 26 && overlapW >= Math.min(r.width, b.width) * 0.5 && g < gap) { best = t; gap = g; }
+    }
+    return best ? own(best) : '';
+  };
+
   const boxes = found.map(({el, titleEl}) => {
     const cs = getComputedStyle(el);
     const ts = titleEl ? getComputedStyle(titleEl) : cs;
@@ -367,6 +384,7 @@ _DETECT = r"""
       title: el.getAttribute('data-title') || (titleEl ? own(titleEl) : ''),
       text: (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 300),
       visual_id: el.getAttribute('data-visual-id'), type: el.getAttribute('data-type'), value_color: el.getAttribute('data-value-color'),
+      label: labelAbove(el),
       background: cs.backgroundColor, border: parseFloat(cs.borderTopWidth) > 0 ? cs.borderTopColor : null,
       radius: parseFloat(cs.borderTopLeftRadius) || 0,
       title_font: ts.fontFamily, title_color: ts.color, _el: el, _title: titleEl,
@@ -454,6 +472,7 @@ def extract(html: str, allow_scripts: bool = False) -> Extraction:
             title_font=_first_family(b["title_font"]), title_color=css_hex(b["title_color"]),
             inset=_inset(b, b.get("area")),
             value=_value(b, b.get("value")), value_color=css_hex(b.get("value_color")),
+            label=" ".join((b.get("label") or "").split())[:80],
         ))
     palette = _palette(data, boxes)
     chart = data.get("chart") or {}
@@ -522,7 +541,10 @@ def title_score(title: str, box: DetectedBox) -> float:
     ta, tb = set(a.split()), set(b.split())
     tokens = len(ta & tb) / max(len(ta), len(tb)) if tb else 0.0
     inside = 0.9 if f" {a} " in f" {_norm(box.text)} " else 0.0  # exact title somewhere in the card
-    return round(max(ratio, tokens * 0.95, inside), 3)
+    # The exact title right above a small card ("Slicer: Date Range" over a dropdown) beats a big
+    # card that merely mentions it somewhere (the header that holds all the filters).
+    above = 0.95 if box.label and f" {a} " in f" {_norm(box.label)} " else 0.0
+    return round(max(ratio, tokens * 0.95, inside, above), 3)
 
 
 class _AIPair(BaseModel):
@@ -639,10 +661,7 @@ _HIDE_CSS = """
 [data-dp-hide] [data-dp-title], [data-dp-hide] [data-dp-title] * { visibility: visible !important; }
 [data-dp-hide] [data-chart-area], [data-dp-hide-all] [data-chart-area] { visibility: visible !important; }
 [data-dp-hide] [data-chart-area] * { visibility: hidden !important; }
-[data-dp-hide] .dp-kpi-bar, [data-dp-hide] .dp-kpi-meta, [data-dp-hide] .dp-kpi-meta * { visibility: visible !important; }
-[data-dp-hide] .dp-sparkline, [data-dp-hide] .dp-sparkline * { visibility: visible !important; }
-[data-dp-hide] .dp-kpi-progress, [data-dp-hide] .dp-kpi-progress * { visibility: visible !important; }
-[data-dp-hide] .dp-subtitle-insight, [data-dp-hide] .dp-subtitle-insight * { visibility: visible !important; }
+[data-dp-contract] [data-chart-area] *, [data-dp-contract] ul, [data-dp-contract] ol { visibility: hidden !important; }
 [data-dp-hide-all] *:not([data-chart-area]) { visibility: hidden !important; }
 """
 
@@ -650,6 +669,13 @@ _HIDE_CSS = """
 def title_kept(visual_title: str, box: DetectedBox | None) -> bool:
     """Whether the card's own title can stay in the background for this visual."""
     return box is not None and title_score(visual_title, box) >= TITLE_THRESHOLD
+
+
+def named_by_label(visual_title: str, box: DetectedBox | None) -> bool:
+    """The visual's name is drawn above the card, not in it (a dropdown showing a dummy value): the
+    card's own text is dummy content and goes, the label above stays."""
+    a = _norm(visual_title)
+    return (box is not None and bool(a) and f" {a} " in f" {_norm(box.label)} " and _norm(box.title) != a)
 
 
 # Contract cards (data-visual-id) hide everything but the title (CSS above). Other cards (Stitch
@@ -661,13 +687,26 @@ _HIDE_JS = """
   for (const id of ids) for (const el of document.querySelectorAll(`[data-dp-box="${id}"]`)) {
     const area = el.getAttribute('data-dp-area');
     if (all.includes(id)) { el.setAttribute('data-dp-hide-all', ''); continue; }
-    if (el.hasAttribute('data-visual-id') || !area) { el.setAttribute('data-dp-hide', ''); continue; }
+    // DashPilot designs: the card art (icons, rings, accents) is part of the design; only the chart
+    // area and the insight lines go (Power BI draws them).
+    if (el.hasAttribute('data-visual-id')) { el.setAttribute('data-dp-contract', ''); continue; }
+    if (!area) { el.setAttribute('data-dp-hide', ''); continue; }
     const a = JSON.parse(area), title = el.querySelector('[data-dp-title]');
+    const hide = d => d.style.setProperty('visibility', 'hidden', 'important');
+    const box = el.getBoundingClientRect();
     for (const d of el.querySelectorAll('*')) {
       if (title && (d === title || d.contains(title) || title.contains(d))) continue;
       const r = d.getBoundingClientRect();
       const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
-      if (cx >= a.x && cx <= a.x + a.w && cy >= a.y && cy <= a.y + a.h) d.style.setProperty('visibility', 'hidden', 'important');
+      if (cx >= a.x && cx <= a.x + a.w && cy >= a.y && cy <= a.y + a.h) { hide(d); continue; }
+      // Values beside the title are dummy too (a "+14.8% vs PY" pill, "Score: 98.4%"): hide them with their
+      // pill. Plain labels with a number ("Last 12 months") stay.
+      const dummy = t => /[0-9]/.test(t) && (/[%$€£₹]/.test(t) || /^\\s*[+\\-−▲▼]/.test(t));
+      if ([...d.childNodes].some(n => n.nodeType === 3 && dummy(n.textContent))) {
+        hide(d);
+        const p = d.parentElement, pr = p && p.getBoundingClientRect();
+        if (p && p !== el && pr.width <= 140 && pr.height <= 44 && pr.width < box.width * 0.6) hide(p);
+      }
     }
   }
 }

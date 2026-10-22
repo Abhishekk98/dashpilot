@@ -55,6 +55,7 @@ class BuildResult(BaseModel):
 class BuildStatus(BaseModel):
     ready: bool
     blockers: list[str] = []
+    warnings: list[str] = []  # shown, but the build goes ahead (e.g. design fidelity below the threshold)
     default_data_folder: str
     project_folder: str
     build: BuildResult | None = None
@@ -74,7 +75,9 @@ def _where(n: int, imps: list) -> str:
     return f"Page {n}: " if len(imps) > 1 else ""
 
 
-def fidelity_blocked(imp) -> bool:
+def fidelity_warning(imp) -> bool:
+    """A low fidelity score is a warning, not a blocker: Stitch's own screenshot comes from another
+    browser at another width, so it never matches our render exactly."""
     return imp.fidelity is not None and not imp.fidelity.passed and not imp.fidelity_override
 
 
@@ -83,7 +86,7 @@ def fidelity_message(imp) -> str:
     low = [c.title for c in f.cards if not c.passed][:3]
     return (f"The page matches the design {f.overall:.1%} (needs {f.threshold:.0%})"
             + (f"; cards below {f.card_threshold:.0%}: {', '.join(low)}" if low else "")
-            + ". Review the fidelity report in Step 8, or accept it there to build anyway.")
+            + ". The build still uses this design; check the fidelity report in Step 8.")
 
 
 def default_data_folder(project: Project) -> str:
@@ -99,19 +102,20 @@ def clean_data_folder(value: str | None, project: Project) -> str:
 
 def get_status(store: ProjectStore, project: Project, llm: LLMProvider | None) -> BuildStatus:
     blockers: list[str] = []
+    warnings: list[str] = []
     sig = None
     try:
         sig, imps = _signature(store, project, llm)
         for n, imp in enumerate(imps, 1):
             if not imp.valid:
                 blockers.append(_where(n, imps) + "Finish the visual mapping in Step 8 (every visual needs one box, no overlaps).")
-            if fidelity_blocked(imp):
-                blockers.append(_where(n, imps) + fidelity_message(imp))
+            if fidelity_warning(imp):
+                warnings.append(_where(n, imps) + fidelity_message(imp))
     except ImportError_ as exc:
         blockers.append(str(exc))
     stored = store.read_json(project.id, BUILD_FILE)
     last = BuildResult.model_validate(stored) if stored else None
-    return BuildStatus(ready=not blockers, blockers=blockers, default_data_folder=default_data_folder(project),
+    return BuildStatus(ready=not blockers, blockers=blockers, warnings=warnings, default_data_folder=default_data_folder(project),
                        project_folder=folder_name(project.name), build=last, stale=bool(last and sig and last.signature != sig),
                        open_folder=default_target(folder_name(project.name)))
 
@@ -125,8 +129,6 @@ def build_project(store: ProjectStore, project: Project, llm: LLMProvider | None
     for n, imp in enumerate(imps, 1):
         if not imp.valid:
             raise BuildError(_where(n, imps) + "Finish the visual mapping in Step 8 first: " + "; ".join(imp.issues[:2]))
-        if fidelity_blocked(imp):
-            raise BuildError(_where(n, imps) + fidelity_message(imp))
     plan = _plan(store, project)
     model, results = build_with_results(store, project, llm)
     problems = tmdl.check(model)
@@ -143,6 +145,9 @@ def build_project(store: ProjectStore, project: Project, llm: LLMProvider | None
     )
     files = build(inputs)
     checks = validate(files, plan.width, plan.height)
+    missing_nav = [i for c in checks if c.status == "fail" for i in c.issues if "navigation buttons" in i]
+    if missing_nav:  # a multi-page report the user cannot move around in is not a usable build
+        raise BuildError("; ".join(missing_nav[:2]))
 
     out = store.project_dir(project.id) / "build"
     shutil.rmtree(out, ignore_errors=True)

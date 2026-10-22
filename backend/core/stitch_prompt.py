@@ -51,25 +51,28 @@ def _field(v: PlanVisual) -> str:
     return (v.dimension or "").split("[")[-1].rstrip("]").replace("_", " ")
 
 
-def build(plan: DashboardPlan, context: BusinessContext, style: StitchStyle = "dark_futuristic", questions: list[str] | None = None) -> StitchPrompt:
+def build(plan: DashboardPlan, context: BusinessContext, style: StitchStyle = "dark_futuristic", questions: list[str] | None = None,
+          all_pages: list[str] | None = None) -> StitchPrompt:
+    """Prompt for one page (`plan` is planner.page_plan); `all_pages` names every page for the menu."""
     label, direction, cards = STYLES.get(style, STYLES["dark_futuristic"])
     p = context.palette
     canvas, text = DARK.get(style, (p.canvas, p.base))
     company = context.company_name or plan.title.removesuffix(" Performance Dashboard")
 
-    pages_list = plan.pages if plan.pages else ["Overview"]
-    curr_page = pages_list[0] if pages_list else "Overview"
+    curr_page = plan.pages[0] if plan.pages else "Overview"
+    pages_list = all_pages or plan.pages or ["Overview"]
     pages_str = ", ".join(f'"{pg}"' for pg in pages_list)
 
     slicers = [v for v in plan.visuals if v.role == "slicer"]
-    slicers_lines = [f'- Slicer: "{s.title}" (Field: {_field(s) or s.title})' for s in slicers]
-    slicers_block = "\n".join(slicers_lines) if slicers_lines else "- Date Range slicer and Category filter pills"
+    slicers_lines = [f'- Filter dropdown "{s.title}" (field: {_field(s) or s.title}); write the name "{s.title}" just above or inside the dropdown'
+                     for s in slicers]
+    slicers_block = "\n".join(slicers_lines) if slicers_lines else "- A date range filter dropdown"
 
     kpis = [v for v in plan.visuals if v.role == "kpi"]
     kpis_lines = []
     for k in kpis:
         m_name = k.measures[0] if k.measures else k.title
-        kpis_lines.append(f'- KPI Card: "{k.title}" (Measure: [{m_name}]) — value + "vs PY" delta pill + sparkline')
+        kpis_lines.append(f'- KPI card "{k.title}" (measure: [{m_name}])')
     kpis_block = "\n".join(kpis_lines) if kpis_lines else "- KPI cards for core business metrics"
 
     charts = [v for v in plan.visuals if v.role == "chart"]
@@ -84,41 +87,37 @@ def build(plan: DashboardPlan, context: BusinessContext, style: StitchStyle = "d
     insights = [v for v in plan.visuals if v.role == "insights"]
     insights_title = insights[0].title if insights else "Key Insights"
 
-    prompt = f"""Design a dashboard UI on a 1280x720 Power BI canvas for {company}.
+    menu = (f'- Left sidebar with a logo placeholder and one menu item per page, labelled exactly {pages_str}; '
+            f'"{curr_page}" is the active item.' if len(pages_list) > 1 else "- Left sidebar with a logo placeholder (single page, no page menu).")
+    prompt = f"""Design one page of a Power BI dashboard for {company}: page "{curr_page}" of {len(pages_list)} ({pages_str}).
 
 STYLE:
 premium, futuristic, advanced layout, 1280x720 Power BI canvas, dark/glass theme, sidebar navigation
-- Aesthetic: {label} — {direction}
-- Canvas: Exact 1280x720 px, dark canvas {canvas}, primary text {text}, accent {p.accent}
-- Cards: {cards}, 14-16px rounded corners, subtle shadows, consistent 16px grid
+- Look: {label}, {direction}
+- Colours: canvas {canvas}, text {text}, accent {p.accent}
+- Cards: {cards}, 14-16px rounded corners, consistent 16px grid
 
-DASHBOARD TITLE & PAGES:
-- Dashboard Title: "{plan.title}"
-- Pages: {len(pages_list)} pages ({pages_str})
-- Current Page: "{curr_page}"
+TITLE: "{plan.title}"
 
 NAVIGATION:
-- Left sidebar navigation panel: logo placeholder at the top, followed by vertical page navigation buttons ({pages_str})
-- Active page highlighted: "{curr_page}"
+{menu}
 
-FILTERS (SLICERS):
+FILTERS:
 {slicers_block}
 
-KPI CARDS:
+KPI CARDS (title at the top; under it a placeholder value, a small vs PY change and a sparkline, which Power BI replaces with live visuals):
 {kpis_block}
-(Each card has metric title, large bold value, delta tag, and mini progress/sparkline)
 
-CHARTS & VISUALIZATIONS:
+CHARTS (title at the top; the rest of the card is the chart area that Power BI fills):
 {charts_block}
-(Inside each chart card, show visual title and leave chart area clear with a clean subtle placeholder for Power BI interactive visuals)
 
-AI INSIGHTS PANEL:
-- "{insights_title}": numbered bullet points [1], [2], [3] summarizing key business takeaways and trends
+INSIGHTS PANEL:
+- "{insights_title}": 3 numbered points
 
 RULES:
-1. Root container must be exactly 1280px wide by 720px tall (overflow: hidden, no scrolling).
-2. Each visual card MUST display its title EXACTLY as written above so Power BI can bind data automatically.
-3. Clean typography using "Segoe UI" or "DIN", high contrast, aligned grid.
-4. Export clean HTML with modern CSS/Tailwind and a full screenshot (screen.png)."""
+1. The page is exactly 1280px wide and 720px tall (overflow hidden, no scrolling).
+2. Every card is its own container and shows its title exactly as written above.
+3. Power BI native chart types only. Use "Segoe UI" for chart text.
+4. No other text: no status lines, sync times, data source names, canvas sizes or extra badges."""
 
     return StitchPrompt(style=style, styles=[{"id": k, "label": v[0]} for k, v in STYLES.items()], prompt=prompt, visuals=len(plan.visuals))

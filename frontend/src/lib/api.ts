@@ -644,6 +644,8 @@ export interface BuildResult {
 export interface BuildStatus {
   ready: boolean;
   blockers: string[];
+  /** Shown, but the build goes ahead (e.g. design fidelity below the threshold). */
+  warnings?: string[];
   default_data_folder: string;
   project_folder: string;
   build: BuildResult | null;

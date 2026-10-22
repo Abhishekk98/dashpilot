@@ -498,3 +498,14 @@ def test_kpi_extras_data_bars_subtitles_and_indian_units(shop):
     assert _indian(rupees) and not _indian(SimpleNamespace(format_string="#,##0", expression="COUNTROWS('Orders')"))
     dax = _kpi_display_dax("GMV", "#,##0", indian=True)
     assert '"Cr"' in dax and '"L"' in dax and "₹" in dax and '"M"' not in dax
+
+
+def test_nav_buttons_sit_on_the_designs_own_page_menu(shop):
+    from core.pbip_builder import design_nav_slots  # noqa: PLC0415
+
+    menu = DetectedBox(id="box_menu", x=27, y=116, w=165, h=36, title="Overview")
+    page = shop.pages[0]
+    page = page.__class__(plan=page.plan, boxes=[*page.boxes, menu], mapping=page.mapping, background=page.background)
+    slots = design_nav_slots(page, ["Overview", "Details"])
+    assert [(s.x, s.y, s.w, s.h) for s in slots] == [(27, 116, 165, 36), (27, 164, 165, 36)]
+    assert design_nav_slots(shop.pages[0], ["Overview", "Details"]) == []  # no menu in the design: template slots

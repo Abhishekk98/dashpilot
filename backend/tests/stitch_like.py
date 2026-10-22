@@ -3,7 +3,10 @@ fake SVG/div charts, KPI values with deltas, slicer pills, header with logo, sta
 import html as htmllib
 
 
-def stitch_export(plan, accent="#F8CF4B", dark=False, rename: dict | None = None, wrapper_padding=0, size=(1280, 720)) -> str:
+def stitch_export(plan, accent="#F8CF4B", dark=False, rename: dict | None = None, wrapper_padding=0, size=(1280, 720),
+                  labels_above=False) -> str:
+    """labels_above: filters as Stitch often draws them, a "Slicer: <name>" label over a dropdown that shows
+    a dummy value, all inside one header panel (which also mentions every filter name)."""
     rename = rename or {}
     bg, card, text, muted = ("#111215", "#1B1C20", "#F2F0F0", "#9A9DA6") if dark else ("#F4F1EA", "#FFFFFF", "#1B1C1C", "#6B6B6B")
     sx, sy = size[0] / 1280, size[1] / 720
@@ -13,7 +16,10 @@ def stitch_export(plan, accent="#F8CF4B", dark=False, rename: dict | None = None
         x, y, w, h = round(b.x * sx), round(b.y * sy), round(b.w * sx), round(b.h * sy)
         t = htmllib.escape(rename.get(v.id, v.title))
         pos = f"left:{x}px;top:{y}px;width:{w}px;height:{h}px"
-        if v.role == "slicer":
+        if v.role == "slicer" and labels_above:
+            cards.append(f'<span class="absolute text-[9px] uppercase text-muted" style="left:{x}px;top:{max(0, y - 12)}px">Slicer: {t}</span>'
+                         f'<div class="absolute rounded-lg bg-canvas flex items-center px-3 text-[12px]" style="left:{x}px;top:{y + 4}px;width:{w}px;height:{h - 8}px">All values</div>')
+        elif v.role == "slicer":
             cards.append(f'<div class="absolute rounded-full bg-surface flex items-center gap-2 px-3 shadow-sm" style="{pos}"><span class="text-[11px] text-muted font-medium">{t}</span><div class="ml-auto flex items-center gap-1 rounded-full bg-canvas px-2 py-1 text-[11px]">All<span class="material-symbols-outlined text-[14px]">expand_more</span></div></div>')
         elif v.role == "kpi":
             cards.append(f'<div class="absolute rounded-2xl bg-surface p-4 shadow-sm flex flex-col" style="{pos}"><div class="flex items-center justify-between"><span class="text-[12px] font-semibold text-ink">{t}</span><span class="material-symbols-outlined text-[16px] text-muted">trending_up</span></div><span class="mt-2 text-[24px] font-semibold text-ink" style="font-family:Segoe UI">$1.48M</span><span class="text-[11px] text-accent font-semibold">+14.2% YoY</span></div>')

@@ -201,6 +201,15 @@ export function BuildWorkspace() {
           </Link>
         </div>
       )}
+      {status && (status.warnings ?? []).length > 0 && (
+        <div role="status" className="mb-6 p-4 rounded-inner bg-secondary-container/30 text-on-surface flex flex-col gap-2">
+          {(status.warnings ?? []).map((m) => (
+            <p key={m} className="flex items-start gap-2 font-body-md text-body-md">
+              <Icon name="warning" className="text-[18px] shrink-0" /> {m}
+            </p>
+          ))}
+        </div>
+      )}
       {status?.stale && b && (
         <div role="status" className="mb-6 p-4 rounded-inner bg-secondary-container/30 text-on-surface flex items-center gap-3">
           <Icon name="update" className="text-[20px]" />

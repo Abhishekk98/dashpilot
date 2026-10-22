@@ -46,12 +46,13 @@ def stitch_prompt(project_id: str, style: StitchStyle = "light_elegant", page: i
     plan = DashboardPlan.model_validate(stored)
     if page > len(plan.pages):
         raise HTTPException(status_code=422, detail=f"The plan has {len(plan.pages)} page(s).")
+    pages = plan.pages
     plan = page_plan(plan, page)
     try:
         questions = [q.text for q in get_insights(store, project, None).questions]
     except Exception:  # questions only enrich the prompt
         questions = []
-    return build(plan, get_context(store, project), style, questions)
+    return build(plan, get_context(store, project), style, questions, all_pages=pages)
 
 
 @router.get("/{project_id}/design/stitch", response_model=StitchState)

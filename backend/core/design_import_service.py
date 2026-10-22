@@ -11,7 +11,6 @@ Files per page (read by the PBIP builder in Step 9):
 from __future__ import annotations
 
 import hashlib
-import io
 import json
 import logging
 import time
@@ -24,7 +23,7 @@ from core.context_service import get_context
 from core.design_ai import plan_signature
 from core.design_fidelity import FidelityReport, score
 from core.design_import import (
-    DetectedBox, MappingItem, ThemeColor, build_theme, extract, match, render_design, title_kept, validate_mapping,
+    DetectedBox, MappingItem, ThemeColor, build_theme, extract, match, named_by_label, render_design, title_kept, validate_mapping,
 )
 from core.planner import DashboardPlan, PlanVisual, page_plan
 from core.planner_service import DESIGN_FILE, PLAN_FILE
@@ -137,19 +136,6 @@ def _stitch_screen(store: ProjectStore, project: Project, page: int = 1) -> byte
     return path.read_bytes() if path.exists() else None
 
 
-def _normalize_screen_png(screen: bytes) -> bytes:
-    try:
-        from PIL import Image  # noqa: PLC0415
-        im = Image.open(io.BytesIO(screen))
-        if im.size != (1280, 720):
-            im = im.resize((1280, 720), Image.Resampling.LANCZOS)
-        buf = io.BytesIO()
-        im.convert("RGB").save(buf, format="PNG")
-        return buf.getvalue()
-    except Exception:
-        return screen
-
-
 def _finish(store: ProjectStore, project: Project, plan: DashboardPlan, imp: DesignImport, html: str, page: int = 1,
             pages: list[str] | None = None) -> ImportResponse:
     imp.issues = validate_mapping(plan, imp.mapping, imp.boxes)
@@ -160,18 +146,15 @@ def _finish(store: ProjectStore, project: Project, plan: DashboardPlan, imp: Des
     for m in imp.mapping:
         m.pbi_title = m.placed and not title_kept(titles.get(m.visual_id, ""), boxes.get(m.box_id or ""))
     hide = [m.box_id for m in imp.mapping if m.box_id and m.placed]
-    hide_titles = [m.box_id for m in imp.mapping if m.box_id and m.pbi_title]
+    hide_titles = [m.box_id for m in imp.mapping if m.box_id and (m.pbi_title or named_by_label(titles.get(m.visual_id, ""), boxes.get(m.box_id)))]
     original, background = render_design(html, hide, imp.scripts, hide_titles)
 
+    # The background is always our render of the design with the mapped cards' dummy contents hidden.
+    # Stitch's screen.png still has its fake charts and numbers (they would show under the Power BI
+    # visuals), so it is only the fidelity reference.
     screen_path = folder / SOURCE_SCREEN
-    if screen_path.exists() and imp.source == "option_a":
-        # Stitch export provides screen.png: use the actual Stitch screen image as page background
-        screen_bytes = _normalize_screen_png(screen_path.read_bytes())
-        (folder / "background.png").write_bytes(screen_bytes)
-        (folder / "original.png").write_bytes(screen_bytes)
-    else:
-        (folder / "background.png").write_bytes(background)
-        (folder / "original.png").write_bytes(original)
+    (folder / "background.png").write_bytes(background)
+    (folder / "original.png").write_bytes(original)
 
     imp.fidelity = score(original, background, imp.boxes, imp.mapping, titles,
                          screen_path.read_bytes() if screen_path.exists() else None, imp.source_w, imp.source_h, imp.scale)
