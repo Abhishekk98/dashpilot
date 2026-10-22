@@ -638,7 +638,10 @@ _HIDE_CSS = """
 [data-dp-hide] [data-dp-title], [data-dp-hide] [data-dp-title] * { visibility: visible !important; }
 [data-dp-hide] [data-chart-area], [data-dp-hide-all] [data-chart-area] { visibility: visible !important; }
 [data-dp-hide] [data-chart-area] * { visibility: hidden !important; }
-[data-dp-hide] .dp-kpi-bar { visibility: visible !important; }
+[data-dp-hide] .dp-kpi-bar, [data-dp-hide] .dp-kpi-meta, [data-dp-hide] .dp-kpi-meta * { visibility: visible !important; }
+[data-dp-hide] .dp-sparkline, [data-dp-hide] .dp-sparkline * { visibility: visible !important; }
+[data-dp-hide] .dp-kpi-progress, [data-dp-hide] .dp-kpi-progress * { visibility: visible !important; }
+[data-dp-hide] .dp-subtitle-insight, [data-dp-hide] .dp-subtitle-insight * { visibility: visible !important; }
 [data-dp-hide-all] *:not([data-chart-area]) { visibility: hidden !important; }
 """
 

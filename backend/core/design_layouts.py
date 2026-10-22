@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 
 from core.planner import CANVAS_H, CANVAS_W, Box, DashboardPlan, PlanVisual
 
-M, G = 24, 16  # outer margin, gap
+M, G = 16, 16  # outer margin, gap (consistent 16px grid)
 SLICER_H = 40
 DATE_W, SLICER_W, SLICER_MIN_W = 280, 200, 168
 TOP = 72  # first row under the header
@@ -35,11 +35,14 @@ class Arrangement:
 
 
 LAYOUTS: dict[str, tuple[str, str]] = {
+    "dark_neon": ("Dark Neon Sidebar", "Left vertical navigation rail, top filters, and cyber-luminous stage cards."),
+    "glass_light": ("Glassmorphism Tabs", "Top horizontal navigation tabs, frosted glass KPI row, and editorial charts."),
+    "gradient_corporate": ("Gradient Corporate Rail", "Left rail slicers, top gradient hero band for KPIs, and structured data tables."),
+    "command_center": ("Command Center", "Dense terminal style: KPI ticker, three-column chart grid, insights column."),
     "bento": ("Bento Grid", "Asymmetric tiles: a wide hero chart beside a 2-column grid, KPIs in a weighted band."),
     "hero_trend": ("Hero KPI + Trend", "One headline KPI next to a large trend, supporting KPIs and charts below."),
     "side_panel": ("Side Panel", "A full-height rail with title, filters and stacked KPIs; charts fill the stage."),
     "executive_split": ("Executive Split", "Story on the left (hero chart + detail), numbers on the right (KPI grid + insights)."),
-    "command_center": ("Command Center", "Dense terminal style: KPI ticker, three-column chart grid, insights column."),
     "editorial": ("Editorial", "Magazine layout: hero chart and supporting charts left, a KPI column on the right."),
     "detail_focus": ("Detail Focus", "A large table or main chart with supporting charts stacked beside it."),
     "grid": ("Classic Grid", "Header, KPI row and an even grid of charts."),
@@ -292,6 +295,102 @@ def _detail_focus(visuals, is_multi: bool = False):
     return vs, header, []
 
 
+def _dark_neon(visuals, is_multi: bool = False):
+    vs, slicers, kpis, charts, insights = _parts(visuals)
+    rail = 216
+    header = _b(M, 16, rail - 2 * M, 56)
+    x0 = rail + G
+    w = CANVAS_W - M - x0
+
+    y = 16
+    if slicers:
+        _slicer_bar(slicers, right=CANVAS_W - M, y=16, min_left=x0)
+        y = 16 + SLICER_H + G
+
+    if kpis:
+        _row(kpis, x0, y, w, 96, gap=G)
+        y += 96 + G
+
+    hero, rest = _hero(charts)
+    tiles = rest + insights
+    h = CANVAS_H - M - y
+    if not tiles:
+        if hero:
+            hero.box = _b(x0, y, w, h)
+    else:
+        hw = int(round((w - G) * (0.54 if len(tiles) <= 3 else 0.48)))
+        if hero:
+            hero.box = _b(x0, y, hw, h)
+            _grid(tiles, x0 + hw + G, y, w - hw - G, h, 2 if len(tiles) >= 3 else 1, gap=G)
+        else:
+            _grid(tiles, x0, y, w, h, 2 if len(tiles) >= 3 else 1, gap=G)
+
+    return vs, header, [("rail", _b(0, 0, rail, CANVAS_H))]
+
+
+def _glass_light(visuals, is_multi: bool = False):
+    vs, slicers, kpis, charts, insights = _parts(visuals)
+    header = _header_row(slicers, is_multi=is_multi)
+    inner = CANVAS_W - 2 * M
+    y = TOP
+    if kpis:
+        _row(kpis, M, y, inner, 92, gap=G)
+        y += 92 + G
+    hero, rest = _hero(charts)
+    tiles = rest + insights
+    h = CANVAS_H - M - y
+    if not tiles:
+        if hero:
+            hero.box = _b(M, y, inner, h)
+    else:
+        hw = int(round((inner - G) * (0.55 if len(tiles) <= 3 else 0.50)))
+        if hero:
+            hero.box = _b(M, y, hw, h)
+            _grid(tiles, M + hw + G, y, inner - hw - G, h, 2 if len(tiles) >= 3 else 1, gap=G)
+        else:
+            _grid(tiles, M, y, inner, h, 2 if len(tiles) >= 3 else 1, gap=G)
+    return vs, header, [("band", _b(0, 0, CANVAS_W, TOP - 4))]
+
+
+def _gradient_corporate(visuals, is_multi: bool = False):
+    vs, slicers, kpis, charts, insights = _parts(visuals)
+    rail = 236
+    header = _b(M, 16, rail - 2 * M, 52)
+
+    sy = 76 + (88 if is_multi else 0) + 12
+    for s in slicers:
+        s.box = _b(M, sy, rail - 2 * M, 38)
+        sy += 38 + 10
+
+    x0 = rail + G
+    w = CANVAS_W - M - x0
+    panels: list[tuple[str, Box]] = [("rail", _b(0, 0, rail, CANVAS_H))]
+
+    y = 16
+    if kpis:
+        kh = 96
+        band_h = kh + 20
+        panels.append(("hero_band", _b(x0, y, w, band_h)))
+        _row(kpis, x0 + 12, y + 10, w - 24, kh, gap=12)
+        y += band_h + G
+
+    hero, rest = _hero(charts)
+    tiles = rest + insights
+    h = CANVAS_H - M - y
+    if not tiles:
+        if hero:
+            hero.box = _b(x0, y, w, h)
+    else:
+        hw = int(round((w - G) * (0.52 if len(tiles) <= 3 else 0.56)))
+        if hero:
+            hero.box = _b(x0, y, hw, h)
+            _grid(tiles, x0 + hw + G, y, w - hw - G, h, 2 if len(tiles) >= 3 else 1, gap=G)
+        else:
+            _grid(tiles, x0, y, w, h, 2 if len(tiles) >= 3 else 1, gap=G)
+
+    return vs, header, panels
+
+
 def _classic(visuals, is_multi: bool = False):
     from core.planner import layout  # noqa: PLC0415
 
@@ -304,8 +403,17 @@ def _classic(visuals, is_multi: bool = False):
 
 
 _BUILDERS = {
-    "bento": _bento, "hero_trend": _hero_trend, "side_panel": _side_panel, "executive_split": _executive_split,
-    "command_center": _command_center, "editorial": _editorial, "detail_focus": _detail_focus, "grid": _classic,
+    "dark_neon": _dark_neon,
+    "glass_light": _glass_light,
+    "gradient_corporate": _gradient_corporate,
+    "command_center": _command_center,
+    "bento": _bento,
+    "hero_trend": _hero_trend,
+    "side_panel": _side_panel,
+    "executive_split": _executive_split,
+    "editorial": _editorial,
+    "detail_focus": _detail_focus,
+    "grid": _classic,
 }
 
 
@@ -324,11 +432,14 @@ def suggest(page: DashboardPlan) -> list[str]:
     trend = any(v.type in ("line", "area") for v in page.visuals if v.role == "chart")
     table = any(v.type in ("table", "matrix") for v in page.visuals if v.role == "chart")
     score = {
+        "dark_neon": 3.8 if trend else 3.2,
+        "glass_light": 3.7 + (k >= 2) * 0.4,
+        "gradient_corporate": 3.6 if table else 3.1,
+        "command_center": 3.5 if c >= 4 else 1.8,
         "bento": 3.0 + (c >= 3),
         "hero_trend": (3.5 if trend else 1.5) if k >= 1 else 0.5,
         "side_panel": (3.2 if k >= 3 else 2.0 if k >= 1 else 1.0) - (s > 4),
         "executive_split": 2.6 + (k >= 2) * 0.5,
-        "command_center": 3.1 if c >= 4 else 1.4,
         "editorial": 2.5 if 2 <= k <= 5 else 0.6,
         "detail_focus": 4.0 if (table and k == 0) else 1.2 if table else 0.3,
         "grid": 0.1,

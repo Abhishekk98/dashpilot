@@ -211,7 +211,7 @@ def _designed(api, sample_bytes) -> str:
     pid = _project(api, sample_bytes)
     assert api.get(f"/api/projects/{pid}/plan").status_code == 200
     api.post(f"/api/projects/{pid}/design/variants")
-    assert api.post(f"/api/projects/{pid}/design/select", json={"id": "light_elegant"}).status_code == 200
+    assert api.post(f"/api/projects/{pid}/design/select", json={"id": "glass_light"}).status_code == 200
     return pid
 
 
@@ -224,7 +224,7 @@ def test_import_api_flow(api, sample_bytes):
     assert res.status_code == 200, res.text
     body = res.json()
     d = body["design"]
-    assert d["valid"] and d["source"] == "option_b" and "Light Elegant" in d["source_name"]
+    assert d["valid"] and d["source"] == "option_b" and "Glassmorphism Light" in d["source_name"]
     assert {m["method"] for m in d["mapping"]} == {"id"} and len(d["mapping"]) == len(body["visuals"])
     png = api.get(f"/api/projects/{pid}/design/background.png")
     assert png.status_code == 200 and Image.open(io.BytesIO(png.content)).size == (1280, 720)

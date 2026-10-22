@@ -231,7 +231,7 @@ export interface BrandPalette {
   growth: string;
 }
 
-export type Archetype = "dark_futuristic" | "light_elegant" | "glassmorphism" | "minimal_corporate" | "neon_tech";
+export type Archetype = "dark_neon" | "glass_light" | "gradient_corporate" | "command_center" | "dark_futuristic" | "light_elegant" | "glassmorphism" | "minimal_corporate" | "neon_tech";
 
 export interface BusinessContext {
   company_name: string;
@@ -484,7 +484,7 @@ export interface DashboardPlan {
   chart_types: string[];
 }
 
-export type DesignStyle = "dark_futuristic" | "light_elegant" | "glassmorphism";
+export type DesignStyle = "dark_neon" | "glass_light" | "gradient_corporate" | "command_center" | "dark_futuristic" | "light_elegant" | "glassmorphism";
 
 export interface DesignVariant {
   /** Option B: a DesignStyle; Option C: "reference_close" | "reference_brand". */

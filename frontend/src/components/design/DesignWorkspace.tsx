@@ -38,11 +38,14 @@ const METHODS: { key: Method; icon: string; title: string; text: string; availab
 const LIMITS = { kpi: 5, chart: 6, slicer: 3 } as const;
 
 const LAYOUT_NAMES: Record<string, string> = {
+  dark_neon: "Dark Neon Sidebar",
+  glass_light: "Glassmorphism Tabs",
+  gradient_corporate: "Gradient Corporate Rail",
+  command_center: "Command Center Telemetry",
   bento: "Bento Grid",
   hero_trend: "Hero KPI + Trend",
   side_panel: "Side Panel",
   executive_split: "Executive Split",
-  command_center: "Command Center",
   editorial: "Editorial",
   detail_focus: "Detail Focus",
   grid: "Classic Grid",
@@ -376,7 +379,7 @@ export function DesignWorkspace() {
                   ? design.stale
                     ? "The plan changed after these designs were made. Regenerate so the designs match the plan."
                     : "Pick the design to build in Power BI. Chart areas stay empty; Power BI draws the real visuals there."
-                  : "Generate three styles of the same plan: Dark Futuristic, Light Elegant and Glassmorphism."}
+                  : "Generate 4 distinct architectural styles: Dark Neon, Glassmorphism Light, Gradient Corporate, and Command Center."}
               </p>
               <PillButton
                 variant="accent"
@@ -385,7 +388,7 @@ export function DesignWorkspace() {
                 title={dirty ? "Save your plan changes first" : !plan.valid ? "Fix the plan issues first" : undefined}
                 onClick={() => run("design", () => generateDesigns(projectId))}
               >
-                {busy === "design" ? "Designing…" : design?.variants.length ? "Regenerate 3 designs" : "Generate 3 designs"}
+                {busy === "design" ? "Designing…" : design?.variants.length ? "Regenerate 4 designs" : "Generate 4 designs"}
               </PillButton>
             </div>
 
@@ -395,15 +398,15 @@ export function DesignWorkspace() {
               </p>
             )}
             {busy === "design" && (
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-                {[0, 1, 2].map((n) => (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                {[0, 1, 2, 3].map((n) => (
                   <div key={n} className="aspect-video rounded-card bg-hatched animate-pulse" />
                 ))}
               </div>
             )}
 
             {busy !== "design" && design && design.variants.length > 0 && (
-              <div className={`grid grid-cols-1 lg:grid-cols-3 gap-5 ${design.stale ? "opacity-60" : ""}`}>
+              <div className={`grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 ${design.stale ? "opacity-60" : ""}`}>
                 {design.variants.map((v) => {
                   const isChosen = design.selected === v.id;
                   const activeCardPage = cardPages[v.id] ?? 1;

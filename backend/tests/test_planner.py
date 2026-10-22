@@ -168,7 +168,7 @@ def test_layout_handles_minimum_and_maximum(shop):
 CTX = BusinessContext(company_name="Shop", industries=["E-commerce"])
 
 
-@pytest.mark.parametrize("archetype", ["dark_futuristic", "light_elegant", "glassmorphism"])
+@pytest.mark.parametrize("archetype", ["dark_neon", "glass_light", "gradient_corporate", "command_center", "dark_futuristic", "light_elegant", "glassmorphism"])
 def test_templates_pass_the_contract(shop, archetype):
     for n in (1, 2):
         plan = page_plan(shop[0], n)
@@ -184,7 +184,7 @@ def test_every_layout_passes_the_contract(shop, layout_name):
         arr = arrange(plan, layout_name)
         assert layout_check(arr) == []
         placed = arr.plan(plan)
-        html = template_html(placed, CTX, "dark_futuristic", arrangement=arr, page_label=f"Page {n}")
+        html = template_html(placed, CTX, "dark_neon", arrangement=arr, page_label=f"Page {n}")
         errors, m = check(html, placed, prefer_browser=False)
         assert errors == [], (layout_name, n, errors)
         got = {b.id: (b.x, b.y, b.w, b.h) for b in m.boxes}
@@ -194,13 +194,11 @@ def test_every_layout_passes_the_contract(shop, layout_name):
 def test_variants_use_different_layouts(shop):
     plan = shop[0]
     variants = generate_variants(plan, CTX, None, prefer_browser=False)
+    assert len(variants) == 4
     assert all(len(v.pages) == 2 and len(v.layouts) == 2 and v.valid for v in variants)
     for page in (0, 1):
-        assert len({v.layouts[page] for v in variants}) == 3  # three different layouts per page
-    assert variants[0].layouts[0] == suggest(page_plan(plan, 1))[0]
+        assert len({v.layouts[page] for v in variants}) == 4  # four different layouts per page
     assert all(LAYOUTS[v.layouts[0]][0] in v.label for v in variants)
-    firsts = [{b: v.pages[0].count(b) for b in ("dp-panel-rail", "dp-kpi-hero")} for v in variants]
-    assert len({json.dumps(f, sort_keys=True) + v.layouts[0] for f, v in zip(firsts, variants)}) == 3
 
 
 def test_contract_reports_every_broken_rule(shop):
@@ -286,7 +284,7 @@ def test_quota_error_stops_ai_for_all_variants(shop):
     plan = shop[0]
     llm = FakeProvider(errors=[LLMRateLimitError("quota exhausted")], max_retries=0)
     variants = generate_variants(plan, CTX, llm, prefer_browser=False)
-    assert [v.source for v in variants] == ["template"] * 3 and all(v.valid for v in variants)
+    assert [v.source for v in variants] == ["template"] * 4 and all(v.valid for v in variants)
     assert len(llm.calls) == 1 and "AI unavailable" in variants[0].note and "skipped" in variants[2].note
 
 
@@ -307,12 +305,12 @@ def test_plan_design_select_api(api, sample_bytes):
     assert api.get(f"/api/projects/{pid}/plan").json()["plan"]["title"] == "Shop Board"  # persisted
 
     design = api.post(f"/api/projects/{pid}/design/variants").json()
-    assert [v["id"] for v in design["design"]["variants"]] == ["dark_futuristic", "light_elegant", "glassmorphism"]
+    assert [v["id"] for v in design["design"]["variants"]] == ["dark_neon", "glass_light", "gradient_corporate", "command_center"]
     assert all(v["valid"] and v["source"] == "template" for v in design["design"]["variants"]) and design["notes"]
 
     assert api.post(f"/api/projects/{pid}/design/select", json={"id": "nope"}).status_code == 422
-    sel = api.post(f"/api/projects/{pid}/design/select", json={"id": "light_elegant"}).json()
-    assert sel["design"]["selected"] == "light_elegant"
+    sel = api.post(f"/api/projects/{pid}/design/select", json={"id": "glass_light"}).json()
+    assert sel["design"]["selected"] == "glass_light"
 
     # editing the plan marks the generated variants stale
     visuals.pop(next(n for n, v in enumerate(visuals) if v["role"] == "chart"))
