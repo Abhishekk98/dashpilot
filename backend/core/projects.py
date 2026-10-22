@@ -43,6 +43,25 @@ class Project(BaseModel):
     files: list[StoredFile] = Field(default_factory=list)
 
 
+class ProjectSummary(BaseModel):
+    id: str
+    name: str
+    created_at: datetime
+    updated_at: datetime
+    files_count: int
+    tables_count: int
+    rows_total: int
+    size_bytes: int
+    stage: int  # 1 to 9
+    stage_label: str  # e.g., "Ready (.pbip)", "Design Import", "KPIs & DAX", "Data Cleaning", "Upload & Profiling"
+    has_build: bool
+    build_valid: bool = False
+    pages_count: int = 1
+    measures_count: int = 0
+    industry: str | None = None
+    palette_accent: str | None = None
+
+
 class ProjectNotFoundError(LookupError):
     pass
 
@@ -83,6 +102,134 @@ class ProjectStore:
         if not path.exists():
             raise ProjectNotFoundError(project_id)
         return Project.model_validate_json(path.read_text(encoding="utf-8"))
+
+    def list(self) -> list[Project]:
+        projects: list[Project] = []
+        if not self.root.exists():
+            return projects
+        for path in self.root.iterdir():
+            if path.is_dir() and (path / "project.json").exists():
+                try:
+                    p = Project.model_validate_json((path / "project.json").read_text(encoding="utf-8"))
+                    projects.append(p)
+                except Exception:
+                    continue
+        projects.sort(key=lambda p: p.created_at, reverse=True)
+        return projects
+
+    def delete(self, project_id: str) -> None:
+        p_dir = self.project_dir(project_id)
+        if not p_dir.exists():
+            raise ProjectNotFoundError(project_id)
+        import shutil
+        shutil.rmtree(p_dir, ignore_errors=True)
+
+    def summary(self, project: Project) -> ProjectSummary:
+        pdir = self.project_dir(project.id)
+        files = project.files
+        tables_count = sum(len(f.tables) for f in files)
+        rows_total = sum(sum(t.rows for t in f.tables) for f in files)
+        size_bytes = sum(f.size_bytes for f in files)
+
+        has_build = (pdir / "build" / "build.json").exists()
+        has_import = (pdir / "design" / "import.json").exists()
+        has_plan = (pdir / "plan.json").exists()
+        has_insights = (pdir / "insights.json").exists()
+        has_measures = (pdir / "measures.json").exists()
+        has_model = (pdir / "model.json").exists()
+        has_context = (pdir / "context.json").exists()
+        has_cleaning = (pdir / "cleaning.json").exists()
+
+        if has_build:
+            stage = 9
+            stage_label = "Ready (.pbip)"
+        elif has_import:
+            stage = 8
+            stage_label = "Design Import"
+        elif has_plan:
+            stage = 7
+            stage_label = "Dashboard Plan"
+        elif has_insights:
+            stage = 6
+            stage_label = "AI Insights"
+        elif has_measures:
+            stage = 5
+            stage_label = "KPIs & DAX"
+        elif has_model:
+            stage = 4
+            stage_label = "Data Model"
+        elif has_context:
+            stage = 3
+            stage_label = "Business Context"
+        elif has_cleaning:
+            stage = 2
+            stage_label = "Data Cleaning"
+        else:
+            stage = 1
+            stage_label = "Upload & Profiling"
+
+        build_valid = False
+        pages_count = 1
+        measures_count = 0
+        if has_build:
+            try:
+                bdata = json.loads((pdir / "build" / "build.json").read_text(encoding="utf-8"))
+                build_valid = bdata.get("valid", False)
+                pages_count = bdata.get("pages", 1)
+                measures_count = bdata.get("measures", 0)
+            except Exception:
+                pass
+        elif has_plan:
+            try:
+                pdata = json.loads((pdir / "plan.json").read_text(encoding="utf-8"))
+                plan_dict = pdata.get("plan", {})
+                pages_count = len(plan_dict.get("pages", [1]))
+            except Exception:
+                pass
+
+        if not measures_count and has_measures:
+            try:
+                mdata = json.loads((pdir / "measures.json").read_text(encoding="utf-8"))
+                measures_count = len(mdata.get("measures", []))
+            except Exception:
+                pass
+
+        industry = None
+        palette_accent = None
+        if has_context:
+            try:
+                cdata = json.loads((pdir / "context.json").read_text(encoding="utf-8"))
+                industry = cdata.get("industry")
+                palette_accent = cdata.get("palette", {}).get("accent")
+            except Exception:
+                pass
+
+        updated_at = project.created_at
+        try:
+            mtimes = [f.stat().st_mtime for f in pdir.glob("*.json")]
+            if mtimes:
+                updated_at = datetime.fromtimestamp(max(mtimes), tz=timezone.utc)
+        except Exception:
+            pass
+
+        return ProjectSummary(
+            id=project.id,
+            name=project.name,
+            created_at=project.created_at,
+            updated_at=updated_at,
+            files_count=len(files),
+            tables_count=tables_count,
+            rows_total=rows_total,
+            size_bytes=size_bytes,
+            stage=stage,
+            stage_label=stage_label,
+            has_build=has_build,
+            build_valid=build_valid,
+            pages_count=pages_count,
+            measures_count=measures_count,
+            industry=industry,
+            palette_accent=palette_accent,
+        )
 
     def save(self, project: Project) -> None:
         self._manifest(project.id).write_text(project.model_dump_json(indent=2), encoding="utf-8")

@@ -34,6 +34,25 @@ export interface Project {
   files: StoredFile[];
 }
 
+export interface ProjectSummary {
+  id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+  files_count: number;
+  tables_count: number;
+  rows_total: number;
+  size_bytes: number;
+  stage: number;
+  stage_label: string;
+  has_build: boolean;
+  build_valid: boolean;
+  pages_count: number;
+  measures_count: number;
+  industry: string | null;
+  palette_accent: string | null;
+}
+
 export type DetectedType =
   | "id" | "uuid" | "currency" | "percentage" | "integer" | "decimal"
   | "date" | "datetime" | "boolean" | "email" | "location" | "category" | "text";
@@ -689,6 +708,10 @@ export function fetchHealth(signal?: AbortSignal): Promise<HealthResponse> {
   return request("/api/health", { signal });
 }
 
+export function listProjects(): Promise<ProjectSummary[]> {
+  return request("/api/projects");
+}
+
 export function createProject(name: string): Promise<Project> {
   return request("/api/projects", {
     method: "POST",
@@ -699,6 +722,10 @@ export function createProject(name: string): Promise<Project> {
 
 export function getProject(id: string): Promise<Project> {
   return request(`/api/projects/${id}`);
+}
+
+export function deleteProject(id: string): Promise<{ ok: boolean }> {
+  return request(`/api/projects/${id}`, { method: "DELETE" });
 }
 
 export function uploadFiles(id: string, files: File[]): Promise<UploadResult> {

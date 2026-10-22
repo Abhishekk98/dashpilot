@@ -11,7 +11,7 @@ from core.cleaning import CleaningPlan, Decision, DiffPreview
 from core.cleaning_service import CleaningError, get_plan, get_preview, run_ai_synonyms, save_decisions
 from core.profiling import QualityReport
 from core.profiling_service import columns_csv, get_report
-from core.projects import Project, ProjectNotFoundError, ProjectStore, StoredFile, TableRef, new_file_id
+from core.projects import Project, ProjectNotFoundError, ProjectStore, ProjectSummary, StoredFile, TableRef, new_file_id
 from core.upload import UploadError, read_tables, validate_upload
 from llm import LLMProvider, get_llm
 
@@ -34,6 +34,12 @@ def _load(store: ProjectStore, project_id: str) -> Project:
         raise HTTPException(status_code=404, detail="Project not found") from None
 
 
+@router.get("", response_model=list[ProjectSummary])
+def list_projects(store: ProjectStore = Depends(get_store)) -> list[ProjectSummary]:
+    projects = store.list()
+    return [store.summary(p) for p in projects]
+
+
 @router.post("", response_model=Project, status_code=201)
 def create_project(body: CreateProject, store: ProjectStore = Depends(get_store)) -> Project:
     return store.create(body.name)
@@ -42,6 +48,13 @@ def create_project(body: CreateProject, store: ProjectStore = Depends(get_store)
 @router.get("/{project_id}", response_model=Project)
 def get_project(project_id: str, store: ProjectStore = Depends(get_store)) -> Project:
     return _load(store, project_id)
+
+
+@router.delete("/{project_id}", status_code=200)
+def delete_project(project_id: str, store: ProjectStore = Depends(get_store)) -> dict[str, bool]:
+    _load(store, project_id)
+    store.delete(project_id)
+    return {"ok": True}
 
 
 @router.post("/{project_id}/files", response_model=UploadResult)

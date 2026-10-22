@@ -50,3 +50,24 @@ def test_upload_limits_and_missing_project(api):
     assert api.get("/api/projects/doesnotexist").status_code == 404
     assert api.get("/api/projects/../etc").status_code == 404
     assert api.delete(f"/api/projects/{pid}/files/nope").status_code == 404
+
+
+def test_list_and_delete_projects(api):
+    p1 = api.post("/api/projects", json={"name": "Alpha Project"}).json()
+    p2 = api.post("/api/projects", json={"name": "Beta Project"}).json()
+    
+    projects = api.get("/api/projects").json()
+    ids = [p["id"] for p in projects]
+    assert p1["id"] in ids and p2["id"] in ids
+    
+    # Check ProjectSummary fields
+    summary = next(p for p in projects if p["id"] == p1["id"])
+    assert summary["name"] == "Alpha Project"
+    assert summary["stage"] == 1
+    assert "stage_label" in summary
+    assert "files_count" in summary
+    
+    # Delete
+    del_res = api.delete(f"/api/projects/{p1['id']}")
+    assert del_res.status_code == 200
+    assert api.get(f"/api/projects/{p1['id']}").status_code == 404
