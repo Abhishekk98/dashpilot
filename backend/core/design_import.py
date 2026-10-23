@@ -556,8 +556,10 @@ class _AIPairs(BaseModel):
     pairs: list[_AIPair]
 
 
-def _item(visual_id: str, box: DetectedBox, method: str, score: float) -> MappingItem:
-    return MappingItem(visual_id=visual_id, box_id=box.id, x=box.x, y=box.y, w=box.w, h=box.h, method=method, score=score)
+def _item(visual_id: str, box: DetectedBox, method: str, score: float, is_slicer: bool = False) -> MappingItem:
+    w = max(box.w, 40) if is_slicer else box.w
+    h = max(box.h, 30) if is_slicer else box.h
+    return MappingItem(visual_id=visual_id, box_id=box.id, x=box.x, y=box.y, w=w, h=h, method=method, score=score)
 
 
 def _box_type_score(v, b: DetectedBox) -> float:
@@ -614,7 +616,7 @@ def _box_type_score(v, b: DetectedBox) -> float:
 
 
 def match(plan: DashboardPlan, boxes: list[DetectedBox], llm: LLMProvider | None = None) -> tuple[list[MappingItem], list[str]]:
-    """Planned visual -> detected box (id, then title, then AI, then nearest-type fallback). All planned visuals are mapped."""
+    """Planned visual -> detected box (id, then title, then AI)."""
     notes: list[str] = []
     by_visual: dict[str, MappingItem] = {}
     used: set[str] = set()
@@ -622,7 +624,8 @@ def match(plan: DashboardPlan, boxes: list[DetectedBox], llm: LLMProvider | None
 
     for b in boxes:  # 1. contract ids (Options B/C)
         if b.visual_id in planned and b.visual_id not in by_visual and b.id not in used:
-            by_visual[b.visual_id] = _item(b.visual_id, b, "id", 1.0)
+            is_slicer = planned[b.visual_id].role == "slicer"
+            by_visual[b.visual_id] = _item(b.visual_id, b, "id", 1.0, is_slicer=is_slicer)
             used.add(b.id)
 
     pairs = sorted(  # 2. titles (Stitch): best pairs first, each side used once
@@ -634,7 +637,8 @@ def match(plan: DashboardPlan, boxes: list[DetectedBox], llm: LLMProvider | None
             break
         if vid in by_visual or b.id in used:
             continue
-        by_visual[vid] = _item(vid, b, "title", score)
+        is_slicer = planned[vid].role == "slicer"
+        by_visual[vid] = _item(vid, b, "title", score, is_slicer=is_slicer)
         used.add(b.id)
 
     left = [v for v in plan.visuals if v.id not in by_visual]
@@ -646,7 +650,8 @@ def match(plan: DashboardPlan, boxes: list[DetectedBox], llm: LLMProvider | None
             accepted = 0
             for p in answer.pairs:
                 if p.visual_id in planned and p.visual_id not in by_visual and p.box_id in free_ids and p.box_id not in used:
-                    by_visual[p.visual_id] = _item(p.visual_id, free_ids[p.box_id], "ai", 0.6)
+                    is_slicer = planned[p.visual_id].role == "slicer"
+                    by_visual[p.visual_id] = _item(p.visual_id, free_ids[p.box_id], "ai", 0.6, is_slicer=is_slicer)
                     used.add(p.box_id)
                     accepted += 1
             if accepted:
@@ -655,46 +660,7 @@ def match(plan: DashboardPlan, boxes: list[DetectedBox], llm: LLMProvider | None
             logger.warning("AI mapping skipped: %s", exc)
             notes.append("AI matching unavailable; map the remaining visuals by hand.")
 
-    # 4. Fallback mapping: pair remaining visuals with nearest/compatible free boxes
-    left = [v for v in plan.visuals if v.id not in by_visual]
-    free = [b for b in boxes if b.id not in used]
-    if left and free:
-        candidates = []
-        for v in left:
-            for b in free:
-                s = _box_type_score(v, b)
-                candidates.append((s, v, b))
-        candidates.sort(key=lambda item: -item[0])
-
-        for s, v, b in candidates:
-            if v.id in by_visual or b.id in used:
-                continue
-            by_visual[v.id] = MappingItem(
-                visual_id=v.id, box_id=b.id, x=b.x, y=b.y, w=b.w, h=b.h,
-                method="fallback", score=round(s, 2), pbi_title=True,
-            )
-            used.add(b.id)
-            logger.warning("Fallback mapping: visual '%s' (%s) mapped to container '%s' (%dx%d)",
-                           v.title, v.type, b.title or b.id, b.w, b.h)
-            notes.append(f"Fallback: '{v.title}' ({v.type}) mapped to design container {b.id} ({b.w}x{b.h}px).")
-
-    # 5. Guaranteed fallback placement: if more visuals exist than boxes, assign default slots
-    still_left = [v for v in plan.visuals if v.id not in by_visual]
-    if still_left:
-        for idx, v in enumerate(still_left):
-            dw = 200 if v.role == "slicer" else 190 if v.role == "kpi" else 380
-            dh = 40 if v.role == "slicer" else 92 if v.role == "kpi" else 240
-            fx = 16 + (idx % 3) * (dw + 16)
-            fy = 72 + (idx // 3) * (dh + 16)
-            by_visual[v.id] = MappingItem(
-                visual_id=v.id, box_id=None, x=fx, y=min(fy, CANVAS_H - dh - 16), w=dw, h=dh,
-                method="fallback", score=0.1, pbi_title=True,
-            )
-            logger.warning("Fallback placement: visual '%s' (%s) placed at (%d, %d, %d, %d)",
-                           v.title, v.type, fx, fy, dw, dh)
-            notes.append(f"Fallback placement: '{v.title}' ({v.type}) placed on dashboard grid.")
-
-    mapping = [by_visual[v.id] for v in plan.visuals]
+    mapping = [by_visual.get(v.id) or MappingItem(visual_id=v.id) for v in plan.visuals]
     return mapping, notes
 
 
@@ -709,30 +675,19 @@ def _ai_prompt(visuals, boxes: list[DetectedBox]) -> str:
 # --- validation ------------------------------------------------------------------------------
 
 def validate_mapping(plan: DashboardPlan, mapping: list[MappingItem], boxes: list[DetectedBox]) -> list[str]:
-    """Validate visual mapping and auto-place any unplaced visuals so the build is never blocked."""
+    """Validate visual mapping rules (slicers < 30px auto-expand to min 30px with overlap resolution)."""
     issues: list[str] = []
     titles = {v.id: v.title for v in plan.visuals}
+    visuals = {v.id: v for v in plan.visuals}
     box_ids = {b.id for b in boxes}
     seen: dict[str, int] = {}
     for m in mapping:
         seen[m.visual_id] = seen.get(m.visual_id, 0) + 1
 
-    for idx, (vid, title) in enumerate(titles.items()):
+    for vid, title in titles.items():
         m = next((item for item in mapping if item.visual_id == vid), None)
         if m is None or not m.placed:
-            v_match = next((v for v in plan.visuals if v.id == vid), None)
-            role = v_match.role if v_match else "chart"
-            dw = 200 if role == "slicer" else 190 if role == "kpi" else 380
-            dh = 40 if role == "slicer" else 92 if role == "kpi" else 240
-            fx = 16 + (idx % 3) * (dw + 16)
-            fy = 72 + (idx // 3) * (dh + 16)
-            if m is None:
-                m = MappingItem(visual_id=vid, x=fx, y=min(fy, CANVAS_H - dh - 16), w=dw, h=dh, method="fallback", pbi_title=True)
-                mapping.append(m)
-            else:
-                m.x, m.y, m.w, m.h = fx, min(fy, CANVAS_H - dh - 16), dw, dh
-                m.method = "fallback"
-                m.pbi_title = True
+            issues.append(f"'{title}' has no box yet; pick a box or place it by hand.")
         elif seen.get(vid, 0) > 1:
             issues.append(f"'{title}' is mapped more than once.")
 
@@ -751,26 +706,47 @@ def validate_mapping(plan: DashboardPlan, mapping: list[MappingItem], boxes: lis
         used.setdefault(m.box_id, m.visual_id)
 
     placed = [m for m in mapping if m.placed and m.visual_id in titles]
-    has_oob = any(m.x < 0 or m.y < 0 or m.x + m.w > CANVAS_W or m.y + m.h > CANVAS_H for m in placed)
-    has_overlap = False
+
+    # Slicer min size: auto-expand slicers < 30px height to safe min height (30px) without error, shifting neighbors if needed
+    slicer_expanded = False
+    for m in placed:
+        v = visuals.get(m.visual_id)
+        if v and v.role == "slicer":
+            if m.h < 30:
+                m.h = 30
+                slicer_expanded = True
+            if m.w < 40:
+                m.w = 40
+                slicer_expanded = True
+
+    if slicer_expanded:
+        has_overlap = False
+        for i, a in enumerate(placed):
+            for b in placed[i + 1:]:
+                if overlap(a, b):
+                    has_overlap = True
+                    break
+            if has_overlap:
+                break
+        if has_overlap:
+            from core.design_layouts import resolve_overlaps  # noqa: PLC0415
+            resolve_overlaps(placed, min_gap=12)
+            for m in placed:
+                m.x = max(16, min(m.x, CANVAS_W - m.w - 16))
+                m.y = max(16, min(m.y, CANVAS_H - m.h - 16))
+
+    for m in placed:
+        v = visuals.get(m.visual_id)
+        # Slicers are auto-expanded; non-slicers too small report error
+        if (v is None or v.role != "slicer") and (m.w < MIN_W or m.h < MIN_H):
+            issues.append(f"'{titles[m.visual_id]}' is too small ({m.w}x{m.h}px; at least {MIN_W}x{MIN_H}).")
+        if m.x < 0 or m.y < 0 or m.x + m.w > CANVAS_W or m.y + m.h > CANVAS_H:
+            issues.append(f"'{titles[m.visual_id]}' is outside the 1280x720 canvas.")
+
     for i, a in enumerate(placed):
         for b in placed[i + 1:]:
             if overlap(a, b):
-                has_overlap = True
-                break
-        if has_overlap:
-            break
-
-    if has_oob or has_overlap:
-        from core.design_layouts import resolve_overlaps  # noqa: PLC0415
-        resolve_overlaps(placed, min_gap=12)
-        for m in placed:
-            m.x = max(16, min(m.x, CANVAS_W - m.w - 16))
-            m.y = max(16, min(m.y, CANVAS_H - m.h - 16))
-
-    for m in placed:
-        if m.w < MIN_W or m.h < MIN_H:
-            issues.append(f"'{titles[m.visual_id]}' is too small ({m.w}x{m.h}px; at least {MIN_W}x{MIN_H}).")
+                issues.append(f"'{titles[a.visual_id]}' overlaps '{titles[b.visual_id]}'.")
     return list(dict.fromkeys(issues))
 
 

@@ -13,7 +13,7 @@ from core.design_ai import template_html
 from core.planner import DashboardPlan, page_plan
 from core.design_contract import playwright_available, render_page
 from core.design_import import (
-    DetectedBox, MappingItem, background_png, build_theme, contrast, css_hex, extract, match, title_score,
+    DetectedBox, MappingItem, background_png, build_theme, contrast, css_hex, extract, match, overlap, title_score,
     validate_mapping,
 )
 from core.dax import StoredMeasures
@@ -188,6 +188,31 @@ def test_mapping_validator_rules(shop):
     text = " ".join(validate_mapping(plan, bad + [MappingItem(visual_id="ghost", w=1, h=1)], boxes))
     for part in ("has no box yet", "is used by both", "outside the 1280x720", "overlaps", "too small", "unknown visual ghost"):
         assert part in text, part
+
+
+def test_slicer_auto_expanded_without_error(shop):
+    plan, _, _ = shop
+    slicer = next(v for v in plan.visuals if v.role == "slicer")
+    other = next(v for v in plan.visuals if v.role == "chart")
+    boxes = [
+        DetectedBox(id="b_slicer", x=100, y=100, w=150, h=28, title=slicer.title),
+        DetectedBox(id="b_other", x=100, y=128, w=150, h=100, title=other.title),
+    ]
+    subplan = DashboardPlan(
+        title=plan.title, subtitle=plan.subtitle, width=1280, height=720,
+        pages=["Overview"], visuals=[slicer, other],
+    )
+    mapping = [
+        MappingItem(visual_id=slicer.id, box_id="b_slicer", x=100, y=100, w=150, h=28, method="title"),
+        MappingItem(visual_id=other.id, box_id="b_other", x=100, y=128, w=150, h=100, method="title"),
+    ]
+    issues = validate_mapping(subplan, mapping, boxes)
+    assert not any("too small" in i for i in issues)
+    slicer_map = next(m for m in mapping if m.visual_id == slicer.id)
+    assert slicer_map.h >= 30
+    other_map = next(m for m in mapping if m.visual_id == other.id)
+    assert not overlap(slicer_map, other_map)
+    assert issues == []
 
 
 # --- theme -----------------------------------------------------------------------------------

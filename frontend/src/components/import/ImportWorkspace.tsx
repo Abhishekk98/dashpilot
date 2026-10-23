@@ -45,7 +45,9 @@ function localProblems(res: ImportResponse, mapping: MappingEdit[]): Set<string>
       }
       boxOwner.set(m.box_id, m.visual_id);
     }
-    if (m.x < 0 || m.y < 0 || m.x + m.w > 1280 || m.y + m.h > 720 || m.w < 40 || m.h < 30) bad.add(m.visual_id);
+    const v = res.visuals.find((vis) => vis.id === m.visual_id);
+    const minH = v?.role === "slicer" ? 28 : 30;
+    if (m.x < 0 || m.y < 0 || m.x + m.w > 1280 || m.y + m.h > 720 || m.w < 40 || m.h < minH) bad.add(m.visual_id);
   }
   placed.forEach((a, i) =>
     placed.slice(i + 1).forEach((b) => {
