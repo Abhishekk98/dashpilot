@@ -922,28 +922,39 @@ def _report_files(inp: BuildInputs, root: str) -> dict[str, bytes]:
             max_right = min((b.x for b in right_boxes), default=title_x + min(title_box.w, 360))
             title_w = max(100, min(title_box.w, max_right - title_x - 12))
             title_h = min(title_box.h, 60)
-            title_visual = report_title_textbox_json(
-                title=inp.plan.title,
-                subtitle=inp.plan.subtitle or "",
-                x=title_x,
-                y=title_y,
-                w=title_w,
-                h=title_h,
-                page=n,
-                tokens=tokens,
-                font_family=title_box.title_font or "Segoe UI",
-                font_color=title_box.title_color or tokens.get("text", "#FFFFFF"),
-            )
-            files[f"{d}/pages/{names[n - 1]}/visuals/{title_visual['name']}/visual.json"] = _json(title_visual)
+            font_family = title_box.title_font or "Segoe UI"
+            font_color = title_box.title_color or tokens.get("text", "#FFFFFF")
+        else:
+            title_x = MARGIN
+            title_y = 14
+            title_w = 320
+            title_h = 46
+            font_family = "Segoe UI"
+            font_color = tokens.get("text", "#FFFFFF")
+
+        title_visual = report_title_textbox_json(
+            title=inp.plan.title,
+            subtitle=inp.plan.subtitle or "",
+            x=title_x,
+            y=title_y,
+            w=title_w,
+            h=title_h,
+            page=n,
+            tokens=tokens,
+            font_family=font_family,
+            font_color=font_color,
+        )
+        files[f"{d}/pages/{names[n - 1]}/visuals/{title_visual['name']}/visual.json"] = _json(title_visual)
 
     for n in range(1, len(pages) + 1):
         curr_page_name = names[n - 1]
         pg = pages[n - 1]
         labels = [p.plan.pages[0] if p.plan.pages else ("Overview" if t == 1 else f"Page {t}") for t, p in enumerate(pages, 1)]
         slots = design_nav_slots(pg, labels)
-        if not slots and len(pages) > 1:
+        if (not slots or len(slots) < len(pages)) and len(pages) > 1:
             is_sidebar, sidebar_w = _is_sidebar_page(pg)
             slots = nav_slots(len(pages), sidebar_w if is_sidebar else 0)
+
         if slots and (len(pages) > 1 or len(slots) > 1):
             for t, slot in enumerate(slots, 1):
                 target_page_name = names[min(t - 1, len(names) - 1)]

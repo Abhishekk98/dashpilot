@@ -784,9 +784,38 @@ def match(plan: DashboardPlan, boxes: list[DetectedBox], llm: LLMProvider | None
                         else:
                             eligible.sort(key=lambda b: (0 if getattr(b, "slot_type", None) == "chart" else 1, b.y, b.x))
 
-                        best_slot = eligible[0]
-                        by_visual[v.id] = _item(v.id, best_slot, "fallback", 0.7, v=v)
-                        by_visual[v.id].pbi_title = True
+                        placed_so_far = [m for m in by_visual.values() if m.placed]
+                        def _collides(cand_item: MappingItem, min_gap: int = 8) -> bool:
+                            return any(
+                                not (cand_item.x + cand_item.w + min_gap <= other.x or
+                                     other.x + other.w + min_gap <= cand_item.x or
+                                     cand_item.y + cand_item.h + min_gap <= other.y or
+                                     other.y + other.h + min_gap <= cand_item.y)
+                                for other in placed_so_far
+                            )
+
+                        best_slot = None
+                        chosen_item = None
+                        for s in eligible:
+                            cand = _item(v.id, s, "fallback", 0.7, v=v)
+                            if not _collides(cand, min_gap=8):
+                                best_slot = s
+                                chosen_item = cand
+                                break
+                        if not best_slot:
+                            best_slot = eligible[0]
+                            chosen_item = _item(v.id, best_slot, "fallback", 0.7, v=v)
+                            while _collides(chosen_item, min_gap=8):
+                                colliding = next(other for other in placed_so_far if not (
+                                    chosen_item.x + chosen_item.w + 8 <= other.x or
+                                    other.x + other.w + 8 <= chosen_item.x or
+                                    chosen_item.y + chosen_item.h + 8 <= other.y or
+                                    other.y + other.h + 8 <= chosen_item.y
+                                ))
+                                chosen_item.y = colliding.y + colliding.h + 8
+
+                        chosen_item.pbi_title = True
+                        by_visual[v.id] = chosen_item
                         used.add(best_slot.id)
                         logger.warning("Auto-fit placement: visual '%s' (%s) mapped to slot '%s' (%dx%d)",
                                        v.title, v.type, best_slot.title or best_slot.id, best_slot.w, best_slot.h)
@@ -816,6 +845,12 @@ def match(plan: DashboardPlan, boxes: list[DetectedBox], llm: LLMProvider | None
                 logger.warning("Auto-grid placement: visual '%s' (%s) placed at (%d, %d, %d, %d)",
                                v.title, v.type, curr_x - dw - gap, curr_y, dw, dh)
                 notes.append(f"Auto-grid placement: '{v.title}' ({v.type}) placed on dashboard grid.")
+
+    placed_items = [m for m in by_visual.values() if m.placed]
+    if placed_items:
+        from core.design_layouts import resolve_overlaps  # noqa: PLC0415
+        resolve_overlaps(placed_items, min_gap=8)
+
 
 
     mapping = [by_visual.get(v.id) or MappingItem(visual_id=v.id) for v in plan.visuals]
