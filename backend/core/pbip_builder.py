@@ -773,7 +773,7 @@ def report_title_textbox_json(title: str, subtitle: str, x: int, y: int, w: int,
         "position": {
             "x": x,
             "y": y,
-            "z": 100,
+            "z": 20005,
             "height": h,
             "width": w,
             "tabOrder": 100,
@@ -908,7 +908,11 @@ def _report_files(inp: BuildInputs, root: str) -> dict[str, bytes]:
         # Report title textbox if an unmapped title box is present in the design
         used_boxes = {m.box_id for m in pg.mapping if m.placed and m.box_id}
         title_box = next(
-            (b for b in pg.boxes if b.id not in used_boxes and (getattr(b, "role", None) == "title" or b.id == "box_01" or ("dashboard" in (b.title or "").lower() and b.y < 80))),
+            (b for b in pg.boxes if b.id not in used_boxes and (
+                getattr(b, "role", None) == "title"
+                or (b.id == "box_01" and (getattr(b, "role", None) == "title" or b.title == "Dashboard" or "dashboard" in (b.title or "").lower() or "report" in (b.title or "").lower()))
+                or (b.y < 80 and b.h <= 70 and any(w in (b.title or "").lower() for w in ("dashboard", "overview", "report", "performance")))
+            )),
             None,
         )
         if title_box is not None:

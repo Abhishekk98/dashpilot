@@ -101,7 +101,7 @@ def _ratio(a: np.ndarray, b: np.ndarray, mask: np.ndarray) -> float:
     return round(int(ok.sum()) / total, 4)
 
 
-def _card_structure_score(box: DetectedBox, reference: np.ndarray, clean: np.ndarray, rendered: np.ndarray, h: int, w: int) -> float:
+def _card_structure_score(box: DetectedBox, reference: np.ndarray, clean: np.ndarray, h: int, w: int) -> tuple[float, float, float]:
     """Evaluate card fidelity based strictly on border, background, and position to prevent penalties
     from empty chart areas (in clean background) vs filled dummy charts/bullets (in reference screenshot)."""
     pos_score = 1.0 if (0 <= box.x and 0 <= box.y and box.x + box.w <= CANVAS_W and box.y + box.h <= CANVAS_H) else 0.0
@@ -109,7 +109,7 @@ def _card_structure_score(box: DetectedBox, reference: np.ndarray, clean: np.nda
     bx1, by1 = max(0, box.x // SCALE), max(0, box.y // SCALE)
     bx2, by2 = min(w - 1, (box.x + box.w) // SCALE), min(h - 1, (box.y + box.h) // SCALE)
     if bx2 <= bx1 or by2 <= by1:
-        return 0.0
+        return 0.0, 0.0, 0.0
 
     c_pad = max(1, 4 // SCALE)
     c_size = max(2, 8 // SCALE)
@@ -139,16 +139,16 @@ def _card_structure_score(box: DetectedBox, reference: np.ndarray, clean: np.nda
         for dx in (-2, -1, 0, 1, 2):
             sy1, sy2 = max(0, by1 + dy), min(h, by2 + dy)
             sx1, sx2 = max(0, bx1 + dx), min(w, bx2 + dx)
-            diff = np.abs(clean[by1:by2, bx1:bx2] - rendered[sy1:sy2, sx1:sx2])
+            diff = np.abs(clean[by1:by2, bx1:bx2] - reference[sy1:sy2, sx1:sx2])
             if diff.size == clean[by1:by2, bx1:bx2].size:
                 m_diff = diff.max(axis=2)
                 sub_mask = border_mask[by1:by2, bx1:bx2]
                 score_shift = (m_diff[sub_mask] <= TOLERANCE).mean()
                 if score_shift > best_border:
                     best_border = score_shift
-    border_score = best_border if best_border > 0 else 0.85
+    border_score = best_border
 
-    return round(0.40 * bg_score + 0.40 * border_score + 0.20 * pos_score, 4)
+    return bg_score, border_score, pos_score
 
 
 def score(original: bytes, background: bytes, boxes: list[DetectedBox], mapping: list[MappingItem], titles: dict[str, str],
@@ -184,8 +184,12 @@ def score(original: bytes, background: bytes, boxes: list[DetectedBox], mapping:
         region &= outside
         s = _ratio(reference, clean, region)
         if s < CARD_THRESHOLD:
-            struct_s = _card_structure_score(box, reference, clean, rendered, h, w)
-            s = max(s, struct_s)
+            bg_score, border_score, pos_score = _card_structure_score(box, reference, clean, h, w)
+            # If the card's border and background match well (>= 0.70), the lower score is caused
+            # by empty chart vs filled dummy chart/bullets. Evaluate on border, bg, and position.
+            if border_score >= 0.70 and bg_score >= 0.70:
+                struct_s = round(0.40 * bg_score + 0.40 * border_score + 0.20 * pos_score, 4)
+                s = max(s, struct_s)
         cards.append(CardFidelity(box_id=box.id, visual_id=m.visual_id, title=titles.get(m.visual_id, box.title), score=s, passed=s >= CARD_THRESHOLD))
 
     render_match = _ratio(reference, rendered, np.ones((h, w), dtype=bool)) if ref_img is not None else None

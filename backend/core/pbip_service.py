@@ -75,19 +75,10 @@ def _where(n: int, imps: list) -> str:
     return f"Page {n}: " if len(imps) > 1 else ""
 
 
-def fidelity_blocks(imp) -> bool:
-    """Fidelity only blocks if overall score is strictly below 70% (and not overridden)."""
-    if imp.fidelity is None or imp.fidelity_override:
-        return False
-    block_threshold = getattr(imp.fidelity, "block_threshold", 0.70)
-    return imp.fidelity.overall < block_threshold
-
-
 def fidelity_warning(imp) -> bool:
-    """A fidelity score below ~80% (threshold) is a warning when >= 70%, not a blocker."""
-    if imp.fidelity is None or imp.fidelity_override or fidelity_blocks(imp):
-        return False
-    return not imp.fidelity.passed
+    """A low fidelity score is a warning, not a blocker: Stitch's own screenshot comes from another
+    browser at another width, so it never matches our render exactly."""
+    return imp.fidelity is not None and not imp.fidelity.passed and not imp.fidelity_override
 
 
 def fidelity_message(imp) -> str:
@@ -118,9 +109,7 @@ def get_status(store: ProjectStore, project: Project, llm: LLMProvider | None) -
         for n, imp in enumerate(imps, 1):
             if not imp.valid:
                 blockers.append(_where(n, imps) + "Finish the visual mapping in Step 8 (every visual needs one box, no overlaps).")
-            if fidelity_blocks(imp):
-                blockers.append(_where(n, imps) + f"Design fidelity ({imp.fidelity.overall:.1%}) is below 70%. Accept it with 'Build anyway' in Step 8 to proceed.")
-            elif fidelity_warning(imp):
+            if fidelity_warning(imp):
                 warnings.append(_where(n, imps) + fidelity_message(imp))
     except ImportError_ as exc:
         blockers.append(str(exc))
@@ -140,8 +129,6 @@ def build_project(store: ProjectStore, project: Project, llm: LLMProvider | None
     for n, imp in enumerate(imps, 1):
         if not imp.valid:
             raise BuildError(_where(n, imps) + "Finish the visual mapping in Step 8 first: " + "; ".join(imp.issues[:2]))
-        if fidelity_blocks(imp):
-            raise BuildError(_where(n, imps) + f"Design fidelity ({imp.fidelity.overall:.1%}) is below 70%. Check 'Build anyway' in Step 8 first.")
     plan = _plan(store, project)
     model, results = build_with_results(store, project, llm)
     problems = tmdl.check(model)
