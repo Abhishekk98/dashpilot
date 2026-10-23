@@ -74,6 +74,7 @@ class DetectedBox(BaseModel):
     value_color: str | None = None  # data-value-color: colour for the KPI number (contract designs leave chart areas empty)
     label: str = ""  # short text drawn right above a small card (a filter's name over its dropdown)
     role: str | None = None  # "title" (report title), "nav" (page navigation), or None
+    slot_type: str | None = None  # "title", "nav", "slicer", "kpi", "table", "chart"
 
 
 class MappingItem(BaseModel):
@@ -491,10 +492,24 @@ def extract(html: str, allow_scripts: bool = False) -> Extraction:
     for b in boxes:
         text_lower = (b.text or "").lower()
         title_lower = (b.title or "").lower()
+        area = b.w * b.h
         if (b.y < 80 and b.h <= 60 and ("overview" in text_lower or "detail" in text_lower or "page" in text_lower or b.id == "box_02") and b.w <= 400):
             b.role = "nav"
-        elif (b.y < 80 and (b.w >= 200 or b.id == "box_01") and ("dashboard" in title_lower or "analytics" in title_lower or "performance" in title_lower or b.id == "box_01")):
+            b.slot_type = "nav"
+        elif (b.y < 80 and (b.w >= 200 or b.id == "box_01") and any(k in title_lower or k in text_lower for k in ("dashboard", "analytics", "performance", "live bi"))):
             b.role = "title"
+            b.slot_type = "title"
+        elif b.y < 70 and b.w >= 250 and b.h <= 65:
+            b.role = "title"
+            b.slot_type = "title"
+        elif b.h <= 65 and b.w >= 80:
+            b.slot_type = "slicer"
+        elif (b.h <= 160 and b.w <= 440) or (area <= 50000 and b.h <= 180):
+            b.slot_type = "kpi"
+        elif b.h >= 220 and (b.w >= 300 or area >= 70000 or (b.h / max(1, b.w) >= 0.7 and area >= 50000)):
+            b.slot_type = "table"
+        else:
+            b.slot_type = "chart"
 
     palette = _palette(data, boxes)
     chart = data.get("chart") or {}
