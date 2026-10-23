@@ -593,10 +593,47 @@ class _AIPairs(BaseModel):
     pairs: list[_AIPair]
 
 
-def _item(visual_id: str, box: DetectedBox, method: str, score: float, is_slicer: bool = False) -> MappingItem:
-    w = max(box.w, 40) if is_slicer else box.w
-    h = max(box.h, 30) if is_slicer else box.h
-    return MappingItem(visual_id=visual_id, box_id=box.id, x=box.x, y=box.y, w=w, h=h, method=method, score=score)
+VISUAL_MIN_SIZES = {
+    "slicer": (140, 32),
+    "kpi": (180, 90),
+    "table": (300, 220),
+    "matrix": (300, 220),
+    "chart": (300, 200),
+    "insights": (280, 180),
+}
+
+
+def visual_min_size(v) -> tuple[int, int]:
+    role = getattr(v, "role", "chart") if v else "chart"
+    vtype = getattr(v, "type", "") if v else ""
+    if role == "slicer":
+        return VISUAL_MIN_SIZES["slicer"]
+    if role == "kpi":
+        return VISUAL_MIN_SIZES["kpi"]
+    if vtype in ("table", "matrix"):
+        return VISUAL_MIN_SIZES["table"]
+    if role == "insights":
+        return VISUAL_MIN_SIZES["insights"]
+    return VISUAL_MIN_SIZES["chart"]
+
+
+def _item(visual_id: str, box: DetectedBox, method: str, score: float, is_slicer: bool = False, v=None) -> MappingItem:
+    role = getattr(v, "role", "slicer" if is_slicer else "chart") if v else ("slicer" if is_slicer else "chart")
+    mw, mh = visual_min_size(v) if v else ((140, 32) if role == "slicer" else (180, 90))
+    v_box = getattr(v, "box", None)
+    is_bigger = (v_box is not None and (box.w > v_box.w + 8 or box.h > v_box.h + 8)) or (method == "fallback" and box.w >= mw + 16 and box.h >= mh + 16)
+    if is_bigger and not box.visual_id:
+        x = box.x + 8
+        y = box.y + 8
+        w = box.w - 16
+        h = box.h - 16
+    else:
+        x = box.x
+        y = box.y
+        w = max(box.w, 40 if role == "slicer" else mw)
+        h = max(box.h, 30 if role == "slicer" else mh)
+    return MappingItem(visual_id=visual_id, box_id=box.id, x=x, y=y, w=w, h=h, method=method, score=score)
+
 
 
 def _box_type_score(v, b: DetectedBox) -> float:
@@ -661,8 +698,9 @@ def match(plan: DashboardPlan, boxes: list[DetectedBox], llm: LLMProvider | None
 
     for b in boxes:  # 1. contract ids (Options B/C)
         if b.visual_id in planned and b.visual_id not in by_visual and b.id not in used:
-            is_slicer = planned[b.visual_id].role == "slicer"
-            by_visual[b.visual_id] = _item(b.visual_id, b, "id", 1.0, is_slicer=is_slicer)
+            v = planned[b.visual_id]
+            is_slicer = v.role == "slicer"
+            by_visual[b.visual_id] = _item(b.visual_id, b, "id", 1.0, is_slicer=is_slicer, v=v)
             used.add(b.id)
 
     pairs = sorted(  # 2. titles (Stitch): best pairs first, each side used once
@@ -674,12 +712,16 @@ def match(plan: DashboardPlan, boxes: list[DetectedBox], llm: LLMProvider | None
             break
         if vid in by_visual or b.id in used:
             continue
-        is_slicer = planned[vid].role == "slicer"
-        by_visual[vid] = _item(vid, b, "title", score, is_slicer=is_slicer)
+        v = planned[vid]
+        mw, mh = visual_min_size(v)
+        if b.w < mw * 0.75 or b.h < mh * 0.75:
+            continue
+        is_slicer = v.role == "slicer"
+        by_visual[vid] = _item(vid, b, "title", score, is_slicer=is_slicer, v=v)
         used.add(b.id)
 
     left = [v for v in plan.visuals if v.id not in by_visual]
-    free = [b for b in boxes if b.id not in used]
+    free = [b for b in boxes if b.id not in used and getattr(b, "role", None) not in ("title", "nav")]
     if left and free and llm is not None:  # 3. AI fallback for renamed / reworded titles
         try:
             answer = llm.generate_text(_ai_prompt(left, free), json_schema=_AIPairs)
@@ -687,10 +729,14 @@ def match(plan: DashboardPlan, boxes: list[DetectedBox], llm: LLMProvider | None
             accepted = 0
             for p in answer.pairs:
                 if p.visual_id in planned and p.visual_id not in by_visual and p.box_id in free_ids and p.box_id not in used:
-                    is_slicer = planned[p.visual_id].role == "slicer"
-                    by_visual[p.visual_id] = _item(p.visual_id, free_ids[p.box_id], "ai", 0.6, is_slicer=is_slicer)
-                    used.add(p.box_id)
-                    accepted += 1
+                    v = planned[p.visual_id]
+                    mw, mh = visual_min_size(v)
+                    box = free_ids[p.box_id]
+                    if box.w >= mw * 0.75 and box.h >= mh * 0.75:
+                        is_slicer = v.role == "slicer"
+                        by_visual[p.visual_id] = _item(p.visual_id, box, "ai", 0.6, is_slicer=is_slicer, v=v)
+                        used.add(p.box_id)
+                        accepted += 1
             if accepted:
                 notes.append(f"AI matched {accepted} visual{'s' if accepted != 1 else ''} whose titles differ in the design; please check them.")
         except Exception as exc:  # matching still works without AI; the user maps the rest
@@ -698,47 +744,79 @@ def match(plan: DashboardPlan, boxes: list[DetectedBox], llm: LLMProvider | None
             notes.append("AI matching unavailable; map the remaining visuals by hand.")
 
     if fallback:
-        # 4. Fallback mapping: pair remaining visuals with nearest/compatible free boxes
+        # 4. Auto-fit placement:
+        # Visual min sizes: KPI ~180x90, chart ~300x200, table ~300x220, slicer ~140x32
+        # Priority: KPIs pehle top slots mein, phir main charts, phir tables (slicers in thin strip slots)
         left = [v for v in plan.visuals if v.id not in by_visual]
-        free = [b for b in boxes if b.id not in used]
+        free = [b for b in boxes if b.id not in used and getattr(b, "role", None) not in ("title", "nav")]
+
         if left and free:
-            candidates = []
-            for v in left:
-                for b in free:
-                    s = _box_type_score(v, b)
-                    candidates.append((s, v, b))
-            candidates.sort(key=lambda item: -item[0])
+            left_slicers = [v for v in left if v.role == "slicer"]
+            left_kpis = [v for v in left if v.role == "kpi"]
+            left_charts = [v for v in left if v.role == "chart" and v.type not in ("table", "matrix")]
+            left_tables = [v for v in left if v.type in ("table", "matrix")]
+            left_insights = [v for v in left if v.role == "insights"]
 
-            for s, v, b in candidates:
-                if v.id in by_visual or b.id in used:
-                    continue
-                is_slicer = v.role == "slicer"
-                w = max(b.w, 40) if is_slicer else b.w
-                h = max(b.h, 30) if is_slicer else b.h
-                by_visual[v.id] = MappingItem(
-                    visual_id=v.id, box_id=b.id, x=b.x, y=b.y, w=w, h=h,
-                    method="fallback", score=round(s, 2), pbi_title=True,
-                )
-                used.add(b.id)
-                logger.warning("Fallback mapping: visual '%s' (%s) mapped to container '%s' (%dx%d)",
-                               v.title, v.type, b.title or b.id, w, h)
-                notes.append(f"Fallback: '{v.title}' ({v.type}) mapped to design container {b.id} ({w}x{h}px).")
+            priority_groups = [
+                ("slicer", left_slicers),
+                ("kpi", left_kpis),
+                ("chart", left_charts),
+                ("table", left_tables),
+                ("insights", left_insights),
+            ]
 
-        # 5. Guaranteed fallback placement: if more visuals exist than boxes, assign default slots
+            for group_role, group_visuals in priority_groups:
+                for v in group_visuals:
+                    if v.id in by_visual:
+                        continue
+                    mw, mh = visual_min_size(v)
+                    eligible = [b for b in free if b.id not in used and b.w >= mw and b.h >= mh]
+                    if not eligible:
+                        eligible = [b for b in free if b.id not in used and b.w >= mw * 0.75 and b.h >= mh * 0.75]
+
+                    if eligible:
+                        if group_role == "kpi":
+                            eligible.sort(key=lambda b: (0 if getattr(b, "slot_type", None) == "kpi" else 1, b.y, b.x))
+                        elif group_role == "slicer":
+                            eligible.sort(key=lambda b: (0 if getattr(b, "slot_type", None) == "slicer" else 1, b.y, b.x))
+                        elif group_role == "table":
+                            eligible.sort(key=lambda b: (0 if getattr(b, "slot_type", None) == "table" else 1, -b.w * b.h))
+                        else:
+                            eligible.sort(key=lambda b: (0 if getattr(b, "slot_type", None) == "chart" else 1, b.y, b.x))
+
+                        best_slot = eligible[0]
+                        by_visual[v.id] = _item(v.id, best_slot, "fallback", 0.7, v=v)
+                        by_visual[v.id].pbi_title = True
+                        used.add(best_slot.id)
+                        logger.warning("Auto-fit placement: visual '%s' (%s) mapped to slot '%s' (%dx%d)",
+                                       v.title, v.type, best_slot.title or best_slot.id, best_slot.w, best_slot.h)
+                        notes.append(f"Auto-fit: '{v.title}' placed in template slot {best_slot.id} ({best_slot.w}x{best_slot.h}px).")
+
+        # 5. Guaranteed auto-grid placement: if slots are not enough or too small, build clean auto-grid in same theme
         still_left = [v for v in plan.visuals if v.id not in by_visual]
         if still_left:
-            for idx, v in enumerate(still_left):
-                dw = 200 if v.role == "slicer" else 190 if v.role == "kpi" else 380
-                dh = 40 if v.role == "slicer" else 92 if v.role == "kpi" else 240
-                fx = 16 + (idx % 3) * (dw + 16)
-                fy = 72 + (idx // 3) * (dh + 16)
+            margin = 16
+            gap = 12
+            bottom_y = max((m.y + m.h for m in by_visual.values() if m.placed), default=72)
+            curr_y = max(72, bottom_y + gap)
+            curr_x = margin
+
+            for v in still_left:
+                mw, mh = visual_min_size(v)
+                dw = max(mw, 200 if v.role == "slicer" else 190 if v.role == "kpi" else 380)
+                dh = max(mh, 36 if v.role == "slicer" else 92 if v.role == "kpi" else 240)
+                if curr_x + dw > CANVAS_W - margin:
+                    curr_x = margin
+                    curr_y += dh + gap
                 by_visual[v.id] = MappingItem(
-                    visual_id=v.id, box_id=None, x=fx, y=min(fy, CANVAS_H - dh - 16), w=dw, h=dh,
+                    visual_id=v.id, box_id=None, x=curr_x, y=curr_y, w=dw, h=dh,
                     method="fallback", score=0.1, pbi_title=True,
                 )
-                logger.warning("Fallback placement: visual '%s' (%s) placed at (%d, %d, %d, %d)",
-                               v.title, v.type, fx, fy, dw, dh)
-                notes.append(f"Fallback placement: '{v.title}' ({v.type}) placed on dashboard grid.")
+                curr_x += dw + gap
+                logger.warning("Auto-grid placement: visual '%s' (%s) placed at (%d, %d, %d, %d)",
+                               v.title, v.type, curr_x - dw - gap, curr_y, dw, dh)
+                notes.append(f"Auto-grid placement: '{v.title}' ({v.type}) placed on dashboard grid.")
+
 
     mapping = [by_visual.get(v.id) or MappingItem(visual_id=v.id) for v in plan.visuals]
     return mapping, notes
