@@ -522,3 +522,265 @@ def check(arr: Arrangement, min_chart: tuple[int, int] = (160, 110)) -> list[str
     """Layout sanity (used by tests and as a guard before rendering): inside, no overlaps, sizes, grid alignment."""
     return verify_layout_grid(arr, min_chart)
 
+
+# --- Dynamic Layout Engine, Collision Resolution & Auto-Pagination (Part 2) ---
+
+MIN_GAP = 12
+
+
+def _get_rect(item) -> tuple[int, int, int, int]:
+    if hasattr(item, "box") and item.box is not None:
+        return int(item.box.x), int(item.box.y), int(item.box.w), int(item.box.h)
+    if hasattr(item, "x") and hasattr(item, "y") and hasattr(item, "w") and hasattr(item, "h"):
+        return int(item.x), int(item.y), int(item.w), int(item.h)
+    if isinstance(item, dict):
+        return int(item.get("x", 0)), int(item.get("y", 0)), int(item.get("w", 0)), int(item.get("h", 0))
+    if isinstance(item, (list, tuple)) and len(item) >= 4:
+        return int(item[0]), int(item[1]), int(item[2]), int(item[3])
+    return 0, 0, 0, 0
+
+
+def _set_rect(item, x: int, y: int, w: int, h: int) -> None:
+    if hasattr(item, "box"):
+        item.box = Box(x=x, y=y, w=w, h=h)
+    if hasattr(item, "x"):
+        item.x = x
+    if hasattr(item, "y"):
+        item.y = y
+    if hasattr(item, "w"):
+        item.w = w
+    if hasattr(item, "h"):
+        item.h = h
+    if isinstance(item, dict):
+        item["x"], item["y"], item["w"], item["h"] = x, y, w, h
+
+
+def rects_intersect(a, b, min_gap: int = MIN_GAP) -> bool:
+    """True if rectangle a and b intersect or violate the minimum gap."""
+    ax, ay, aw, ah = _get_rect(a)
+    bx, by, bw, bh = _get_rect(b)
+    return not (ax + aw + min_gap <= bx or bx + bw + min_gap <= ax or
+                ay + ah + min_gap <= by or by + bh + min_gap <= ay)
+
+
+def resolve_overlaps(
+    items: list,
+    canvas_w: int = CANVAS_W,
+    canvas_h: int = CANVAS_H,
+    min_gap: int = MIN_GAP,
+    margin: int = M,
+    top_offset: int = TOP,
+) -> list:
+    """Ensure no two visuals intersect (gap >= min_gap) and all fit within canvas margins.
+    If an overlap is found, shifts the visual right or down to the next free slot."""
+    if not items:
+        return items
+
+    placed: list = []
+    max_w = canvas_w - 2 * margin
+    max_h = canvas_h - top_offset - margin
+
+    for item in items:
+        x, y, w, h = _get_rect(item)
+        role = getattr(item, "role", "chart")
+        if w <= 0:
+            w = 200 if role == "slicer" else 190 if role == "kpi" else 380
+        if h <= 0:
+            h = 40 if role == "slicer" else 92 if role == "kpi" else 240
+
+        w = max(40, min(w, max_w))
+        h = max(30, min(h, max_h))
+
+        is_slicer = role == "slicer" or (y < top_offset and h <= 50)
+        curr_top = 16 if is_slicer else top_offset
+
+        cur_x = max(margin, min(x, canvas_w - margin - w))
+        cur_y = max(curr_top, y)
+
+        def collides(cx: int, cy: int) -> bool:
+            return any(rects_intersect((cx, cy, w, h), p, min_gap=min_gap) for p in placed)
+
+        if collides(cur_x, cur_y):
+            found_slot = False
+            for p in placed:
+                px, py, pw, ph = _get_rect(p)
+                cand_x = px + pw + min_gap
+                cand_y = py
+                if cand_x + w <= canvas_w - margin and not collides(cand_x, cand_y):
+                    cur_x, cur_y = cand_x, cand_y
+                    found_slot = True
+                    break
+            if not found_slot:
+                bottom_edge = max((_get_rect(p)[1] + _get_rect(p)[3] for p in placed), default=curr_top)
+                cur_x = margin
+                cur_y = bottom_edge + min_gap
+                while collides(cur_x, cur_y):
+                    c = next(p for p in placed if rects_intersect((cur_x, cur_y, w, h), p, min_gap=min_gap))
+                    cur_y = _get_rect(c)[1] + _get_rect(c)[3] + min_gap
+
+        _set_rect(item, cur_x, cur_y, w, h)
+        placed.append(item)
+
+    return items
+
+
+def adapt_grid_layout(
+    visuals: list[PlanVisual],
+    canvas_w: int = CANVAS_W,
+    canvas_h: int = CANVAS_H,
+    min_gap: int = MIN_GAP,
+    margin: int = M,
+    top_offset: int = TOP,
+) -> list[PlanVisual]:
+    """Adapt the visual layout into clean KPI rows and chart grids without stretching or cutting."""
+    vs, slicers, kpis, charts, insights = _parts(visuals)
+    inner_w = canvas_w - 2 * margin
+
+    if slicers:
+        _slicer_bar(slicers, right=canvas_w - margin, y=16, min_left=margin + 360)
+
+    y = top_offset
+    if kpis:
+        kpi_h = 92
+        kpi_cols = min(len(kpis), 5)
+        kpi_w = (inner_w - (kpi_cols - 1) * min_gap) // kpi_cols
+        for i, k in enumerate(kpis):
+            row_idx = i // 5
+            col_idx = i % 5
+            ky = y + row_idx * (kpi_h + min_gap)
+            kx = margin + col_idx * (kpi_w + min_gap)
+            k.box = _b(kx, ky, kpi_w, kpi_h)
+        kpi_rows = math.ceil(len(kpis) / 5)
+        y += kpi_rows * kpi_h + kpi_rows * min_gap
+
+    tiles = charts + insights
+    if tiles:
+        cols = 3 if len(tiles) >= 5 else 2 if len(tiles) >= 2 else 1
+        tile_w = (inner_w - (cols - 1) * min_gap) // cols
+        tile_h = 240
+        for i, t in enumerate(tiles):
+            r = i // cols
+            c = i % cols
+            tx = margin + c * (tile_w + min_gap)
+            ty = y + r * (tile_h + min_gap)
+            t.box = _b(tx, ty, tile_w, tile_h)
+
+    return vs
+
+
+@dataclass
+class PageSlice:
+    page_num: int
+    visuals: list[PlanVisual]
+    mapping: list = field(default_factory=list)
+
+
+def paginate_visuals(
+    visuals: list[PlanVisual],
+    mapping: list | None = None,
+    canvas_w: int = CANVAS_W,
+    canvas_h: int = CANVAS_H,
+    min_gap: int = MIN_GAP,
+    margin: int = M,
+    top_offset: int = TOP,
+) -> list[PageSlice]:
+    """Auto-pagination: Visuals exceeding canvas bounds (y + h > 720 - margin) automatically
+    move to the next page with identical theme, header space, and grid rules."""
+    if not visuals:
+        return [PageSlice(page_num=1, visuals=[], mapping=[])]
+
+    mapping_by_vid = {getattr(m, "visual_id", None): m for m in (mapping or [])}
+
+    for v in visuals:
+        if v.box is None:
+            dw = 200 if v.role == "slicer" else 190 if v.role == "kpi" else 380
+            dh = 40 if v.role == "slicer" else 92 if v.role == "kpi" else 240
+            v.box = _b(margin, top_offset, dw, dh)
+        m = mapping_by_vid.get(v.id)
+        if m and getattr(m, "placed", False):
+            v.box = _b(m.x, m.y, m.w, m.h)
+
+    resolve_overlaps(visuals, canvas_w=canvas_w, canvas_h=canvas_h, min_gap=min_gap, margin=margin, top_offset=top_offset)
+
+    pages: list[PageSlice] = []
+    max_usable_h = canvas_h - margin
+    current_page_num = 1
+    remaining = list(visuals)
+
+    while remaining:
+        current_page_visuals: list[PlanVisual] = []
+        overflow: list[PlanVisual] = []
+
+        if current_page_num > 1:
+            adapt_grid_layout(remaining, canvas_w=canvas_w, canvas_h=canvas_h, min_gap=min_gap, margin=margin, top_offset=top_offset)
+            resolve_overlaps(remaining, canvas_w=canvas_w, canvas_h=canvas_h, min_gap=min_gap, margin=margin, top_offset=top_offset)
+
+        for v in remaining:
+            b = v.box
+            if b.y + b.h <= max_usable_h:
+                v_copy = v.model_copy(deep=True)
+                v_copy.page = current_page_num
+                current_page_visuals.append(v_copy)
+            else:
+                overflow.append(v)
+
+        if not current_page_visuals and overflow:
+            first = overflow.pop(0)
+            first_copy = first.model_copy(deep=True)
+            first_copy.page = current_page_num
+            first_copy.box.y = top_offset
+            first_copy.box.h = min(first_copy.box.h, max_usable_h - top_offset)
+            current_page_visuals.append(first_copy)
+
+        slice_mapping = []
+        for pv in current_page_visuals:
+            orig_m = mapping_by_vid.get(pv.id)
+            if orig_m is not None:
+                new_m = orig_m.model_copy(deep=True)
+                new_m.x, new_m.y, new_m.w, new_m.h = pv.box.x, pv.box.y, pv.box.w, pv.box.h
+            else:
+                from core.design_import import MappingItem  # noqa: PLC0415
+                new_m = MappingItem(visual_id=pv.id, x=pv.box.x, y=pv.box.y, w=pv.box.w, h=pv.box.h, method="fallback", pbi_title=True)
+            slice_mapping.append(new_m)
+
+        pages.append(PageSlice(page_num=current_page_num, visuals=current_page_visuals, mapping=slice_mapping))
+        remaining = overflow
+        current_page_num += 1
+
+    return pages
+
+
+def validate_and_autofix_layout(
+    visuals: list[PlanVisual],
+    mapping: list | None = None,
+    canvas_w: int = CANVAS_W,
+    canvas_h: int = CANVAS_H,
+    min_gap: int = MIN_GAP,
+    margin: int = M,
+) -> tuple[list[PageSlice], list[str]]:
+    """Strict layout check and auto-fix:
+    - Zero overlaps (min_gap >= 8-12px)
+    - All visuals within 1280x720 canvas
+    - Overflows auto-paginated to next page(s)
+    - Never blocks build, auto-fixes issues and logs notes
+    """
+    notes: list[str] = []
+    has_overlap = False
+    for i, a in enumerate(visuals):
+        for b in visuals[i + 1:]:
+            if rects_intersect(a.box if a.box else a, b.box if b.box else b, min_gap=min_gap):
+                has_overlap = True
+                break
+        if has_overlap:
+            break
+
+    if has_overlap:
+        notes.append("Visual overlap detected; layout engine auto-shifted visuals to clean non-overlapping slots.")
+
+    pages = paginate_visuals(visuals, mapping=mapping, canvas_w=canvas_w, canvas_h=canvas_h, min_gap=min_gap, margin=margin)
+    if len(pages) > 1:
+        notes.append(f"Visuals exceeded 1280x720 canvas height; auto-paginated across {len(pages)} pages with navigation.")
+
+    return pages, notes
+
+

@@ -83,3 +83,125 @@ def test_nav_slots_fit_the_header_or_the_rail():
         arr = _arrange(plan, name)
         for v in arr.visuals:
             assert not any(v.box.x < s.x + s.w and s.x < v.box.x + v.box.w and v.box.y < s.y + s.h and s.y < v.box.y + v.box.h for s in slots), (name, v.id)
+
+
+# --- Tests for Part 2: Collision resolution, No overlap, Auto-pagination (3, 8, 15 visuals) ---
+
+def test_layout_engine_3_visuals_no_overlap_in_bounds():
+    """3 visuals case: 0 overlap, gap >= 12px, all within 1280x720 canvas, 1 page."""
+    from core.design_layouts import paginate_visuals, rects_intersect
+
+    visuals = [
+        PlanVisual(id="kpi_1", role="kpi", type="card", title="Revenue", box=Box(x=16, y=72, w=200, h=92)),
+        PlanVisual(id="chart_1", role="chart", type="line", title="Daily Trend", box=Box(x=16, y=176, w=600, h=240)),
+        PlanVisual(id="chart_2", role="chart", type="clustered_bar", title="Top Products", box=Box(x=628, y=176, w=600, h=240)),
+    ]
+    pages = paginate_visuals(visuals)
+    assert len(pages) == 1
+    p1 = pages[0].visuals
+    assert len(p1) == 3
+
+    # Check bounds
+    for v in p1:
+        b = v.box
+        assert b.x >= 0 and b.y >= 0, f"{v.id} negative coords ({b.x}, {b.y})"
+        assert b.x + b.w <= 1280, f"{v.id} exceeds canvas width ({b.x + b.w} > 1280)"
+        assert b.y + b.h <= 720, f"{v.id} exceeds canvas height ({b.y + b.h} > 720)"
+
+    # Check zero overlap with gap >= 12px
+    for i, a in enumerate(p1):
+        for b in p1[i + 1:]:
+            assert not rects_intersect(a.box, b.box, min_gap=12), f"{a.id} overlaps {b.id}"
+
+
+def test_layout_engine_8_visuals_no_overlap_in_bounds():
+    """8 visuals case: 4 KPIs + 4 charts, all overlapping initially, auto-resolved with zero overlap."""
+    from core.design_layouts import paginate_visuals, rects_intersect
+
+    visuals = []
+    # Intentionally start with overlapping/identical coordinates
+    for k in range(1, 5):
+        visuals.append(PlanVisual(id=f"kpi_{k}", role="kpi", type="card", title=f"KPI {k}", box=Box(x=16, y=72, w=220, h=92)))
+    for c in range(1, 5):
+        visuals.append(PlanVisual(id=f"chart_{c}", role="chart", type="clustered_bar", title=f"Chart {c}", box=Box(x=16, y=176, w=600, h=240)))
+
+    pages = paginate_visuals(visuals)
+    assert len(pages) == 1
+    p1 = pages[0].visuals
+    assert len(p1) == 8
+
+    # Check bounds
+    for v in p1:
+        b = v.box
+        assert b.x >= 0 and b.y >= 0, f"{v.id} negative coords ({b.x}, {b.y})"
+        assert b.x + b.w <= 1280, f"{v.id} exceeds canvas width ({b.x + b.w} > 1280)"
+        assert b.y + b.h <= 720, f"{v.id} exceeds canvas height ({b.y + b.h} > 720)"
+
+    # Check zero overlap for all pairs
+    for i, a in enumerate(p1):
+        for b in p1[i + 1:]:
+            assert not rects_intersect(a.box, b.box, min_gap=12), f"{a.id} overlaps {b.id}"
+
+
+def test_layout_engine_15_visuals_auto_pagination_and_no_overlap():
+    """15 visuals case: 5 KPIs + 9 charts + 1 insights box. Exceeds 720px, overflows to next page."""
+    from core.design_layouts import paginate_visuals, rects_intersect
+
+    visuals = []
+    # 5 KPIs
+    for k in range(1, 6):
+        visuals.append(PlanVisual(id=f"kpi_{k}", role="kpi", type="card", title=f"KPI {k}", box=Box(x=16, y=72, w=220, h=92)))
+    # 9 charts
+    for c in range(1, 10):
+        visuals.append(PlanVisual(id=f"chart_{c}", role="chart", type="clustered_bar", title=f"Chart {c}", box=Box(x=16, y=176, w=600, h=240)))
+    # 1 insights box
+    visuals.append(PlanVisual(id="insights_1", role="insights", type="text_box", title="Key Insights", box=Box(x=16, y=176, w=600, h=180)))
+
+    assert len(visuals) == 15
+    pages = paginate_visuals(visuals)
+
+    # Overflow MUST move to next page(s)
+    assert len(pages) >= 2, f"Expected at least 2 pages for 15 visuals, got {len(pages)}"
+
+    # All 15 visuals must be accounted for
+    total_preserved = sum(len(p.visuals) for p in pages)
+    assert total_preserved == 15, f"Preserved {total_preserved} of 15 visuals"
+
+    # On EVERY page: zero overlaps, all inside 1280x720 canvas
+    for pg in pages:
+        p_vs = pg.visuals
+        for v in p_vs:
+            b = v.box
+            assert b.x >= 0 and b.y >= 0, f"Page {pg.page_num}: {v.id} negative ({b.x}, {b.y})"
+            assert b.x + b.w <= 1280, f"Page {pg.page_num}: {v.id} width overflow ({b.x + b.w} > 1280)"
+            assert b.y + b.h <= 720, f"Page {pg.page_num}: {v.id} height overflow ({b.y + b.h} > 720)"
+        for i, a in enumerate(p_vs):
+            for b in p_vs[i + 1:]:
+                assert not rects_intersect(a.box, b.box, min_gap=12), f"Page {pg.page_num}: {a.id} overlaps {b.id}"
+
+
+def test_validator_autofixes_overlap_and_out_of_bounds():
+    """Validator: detects overlaps & out-of-bounds, auto-fixes them without blocking."""
+    from core.design_layouts import validate_and_autofix_layout, rects_intersect
+
+    # 4 overlapping visuals with out-of-bounds coords
+    visuals = [
+        PlanVisual(id="v1", role="kpi", type="card", title="KPI 1", box=Box(x=100, y=100, w=200, h=92)),
+        PlanVisual(id="v2", role="kpi", type="card", title="KPI 2", box=Box(x=100, y=100, w=200, h=92)),  # identical = overlap
+        PlanVisual(id="v3", role="chart", type="line", title="Chart 1", box=Box(x=1200, y=100, w=500, h=300)),  # width OOB
+        PlanVisual(id="v4", role="chart", type="clustered_bar", title="Chart 2", box=Box(x=50, y=650, w=400, h=300)),  # height OOB
+    ]
+    pages, notes = validate_and_autofix_layout(visuals)
+    assert notes  # notes logged
+    assert len(pages) >= 1
+
+    for pg in pages:
+        for v in pg.visuals:
+            b = v.box
+            assert b.x >= 0 and b.y >= 0
+            assert b.x + b.w <= 1280
+            assert b.y + b.h <= 720
+        for i, a in enumerate(pg.visuals):
+            for b in pg.visuals[i + 1:]:
+                assert not rects_intersect(a.box, b.box, min_gap=12)
+

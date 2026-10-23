@@ -134,14 +134,38 @@ def build_project(store: ProjectStore, project: Project, llm: LLMProvider | None
     problems = tmdl.check(model)
     if problems:
         raise BuildError("The data model has problems: " + "; ".join(problems[:3]))
-    pages = [PageInput(plan=page_plan(plan, n), boxes=imp.boxes, mapping=imp.mapping,
-                       background=(page_dir(store, project, n) / "background.png").read_bytes()) for n, imp in enumerate(imps, 1)]
-    first = pages[0]
+    from core.design_layouts import paginate_visuals  # noqa: PLC0415
+    expanded_pages: list[PageInput] = []
+    for n, imp in enumerate(imps, 1):
+        p_plan = page_plan(plan, n)
+        bg = (page_dir(store, project, n) / "background.png").read_bytes()
+        slices = paginate_visuals(p_plan.visuals, imp.mapping)
+        if len(slices) <= 1:
+            expanded_pages.append(PageInput(plan=p_plan, boxes=imp.boxes, mapping=imp.mapping, background=bg))
+        else:
+            for s_idx, sl in enumerate(slices):
+                page_label = f"{p_plan.pages[0]} Part {s_idx + 1}" if p_plan.pages else f"Page {len(expanded_pages) + 1}"
+                sub_plan = p_plan.model_copy(update={"visuals": sl.visuals, "pages": [page_label]})
+                expanded_pages.append(PageInput(plan=sub_plan, boxes=imp.boxes, mapping=sl.mapping, background=bg))
+
+    total_page_count = len(expanded_pages)
+    if total_page_count > 1:
+        all_page_names = [pg.plan.pages[0] if pg.plan.pages else f"Page {i}" for i, pg in enumerate(expanded_pages, 1)]
+        seen_names: dict[str, int] = {}
+        deduped_names = []
+        for name in all_page_names:
+            cnt = seen_names.get(name, 0)
+            seen_names[name] = cnt + 1
+            deduped_names.append(f"{name} {cnt + 1}" if cnt > 0 else name)
+        for i, pg in enumerate(expanded_pages):
+            pg.plan = pg.plan.model_copy(update={"pages": [deduped_names[i]]})
+
+    first = expanded_pages[0]
     inputs = BuildInputs(
         project_name=project.name, model=model, cleaned=results, measures=valid_measures(store, project, llm),
         plan=first.plan, boxes=first.boxes, mapping=first.mapping, theme=imps[0].theme, background=first.background,
         sources=[(f.filename, store.file_path(project.id, f).read_bytes()) for f in project.files],
-        data_folder=folder_value, extra_pages=pages[1:],
+        data_folder=folder_value, extra_pages=expanded_pages[1:],
     )
     files = build(inputs)
     checks = validate(files, plan.width, plan.height)

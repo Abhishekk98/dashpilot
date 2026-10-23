@@ -828,6 +828,10 @@ def _report_files(inp: BuildInputs, root: str) -> dict[str, bytes]:
         files[f"{root}/StaticResources/RegisteredResources/{background_file(n)}"] = pg.background
         boxes = {b.id: b for b in pg.boxes}
         mapping = {m.visual_id: m for m in pg.mapping}
+        from core.design_layouts import resolve_overlaps
+        placed_items = [mapping[v.id] for v in pg.plan.visuals if v.id in mapping and mapping[v.id].placed]
+        if placed_items:
+            resolve_overlaps(placed_items, min_gap=12)
         for order, v in enumerate(pg.plan.visuals):
             item = mapping.get(v.id)
             if item is None or not item.placed:

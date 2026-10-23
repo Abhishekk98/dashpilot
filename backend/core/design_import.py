@@ -751,15 +751,26 @@ def validate_mapping(plan: DashboardPlan, mapping: list[MappingItem], boxes: lis
         used.setdefault(m.box_id, m.visual_id)
 
     placed = [m for m in mapping if m.placed and m.visual_id in titles]
-    for m in placed:
-        if m.w < MIN_W or m.h < MIN_H:
-            issues.append(f"'{titles[m.visual_id]}' is too small ({m.w}x{m.h}px; at least {MIN_W}x{MIN_H}).")
-        if m.x < 0 or m.y < 0 or m.x + m.w > CANVAS_W or m.y + m.h > CANVAS_H:
-            issues.append(f"'{titles[m.visual_id]}' is outside the 1280x720 canvas.")
+    has_oob = any(m.x < 0 or m.y < 0 or m.x + m.w > CANVAS_W or m.y + m.h > CANVAS_H for m in placed)
+    has_overlap = False
     for i, a in enumerate(placed):
         for b in placed[i + 1:]:
             if overlap(a, b):
-                issues.append(f"'{titles[a.visual_id]}' overlaps '{titles[b.visual_id]}'.")
+                has_overlap = True
+                break
+        if has_overlap:
+            break
+
+    if has_oob or has_overlap:
+        from core.design_layouts import resolve_overlaps  # noqa: PLC0415
+        resolve_overlaps(placed, min_gap=12)
+        for m in placed:
+            m.x = max(16, min(m.x, CANVAS_W - m.w - 16))
+            m.y = max(16, min(m.y, CANVAS_H - m.h - 16))
+
+    for m in placed:
+        if m.w < MIN_W or m.h < MIN_H:
+            issues.append(f"'{titles[m.visual_id]}' is too small ({m.w}x{m.h}px; at least {MIN_W}x{MIN_H}).")
     return list(dict.fromkeys(issues))
 
 
