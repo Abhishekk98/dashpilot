@@ -75,20 +75,39 @@ export function MappingCanvas({ view, backgroundUrl, originalUrl, html, visuals,
         {showBoxes &&
           boxes
             .filter((b) => !used.has(b.id))
-            .map((b) => (
-              <button
-                key={b.id}
-                type="button"
-                title={selected ? `Use this slot for the selected visual (${b.title || b.id})` : b.title || b.id}
-                onClick={() => selected && onAssignBox(b.id)}
-                className={`absolute rounded-[14px] border-2 border-dashed border-outline/60 bg-surface-container/10 ${selected ? "hover:bg-secondary-container/20 cursor-copy" : "cursor-default"}`}
-                style={{ left: b.x, top: b.y, width: b.w, height: b.h }}
-              >
-                <span className="absolute -top-3 left-3 px-2.5 py-0.5 rounded-full bg-surface-container-high text-on-surface-variant font-code-sm text-[13px]">
-                  Slot {b.id.replace("box_", "#")} · unused
-                </span>
-              </button>
-            ))}
+            .map((b) => {
+              const isTitle = b.id === "box_01" || b.role === "title";
+              const isNav = b.id === "box_02" || b.role === "nav";
+              if (isTitle || isNav) {
+                return (
+                  <div
+                    key={b.id}
+                    title={isTitle ? "Report Title (mapped to Title Textbox)" : "Page Navigation (mapped to Navigation Buttons)"}
+                    className="absolute rounded-[14px] border border-secondary-container/40 bg-secondary-container/5 pointer-events-none"
+                    style={{ left: b.x, top: b.y, width: b.w, height: b.h }}
+                  >
+                    <span className="absolute -top-3 left-3 px-2.5 py-0.5 rounded-full bg-surface-container-high text-on-surface-variant font-code-sm text-[12px] flex items-center gap-1.5 border border-outline/20 shadow-sm">
+                      <span className="w-1.5 h-1.5 rounded-full bg-secondary-container" />
+                      Slot {b.id.replace("box_", "#")} · {isTitle ? "Report Title" : "Page Navigation"}
+                    </span>
+                  </div>
+                );
+              }
+              return (
+                <button
+                  key={b.id}
+                  type="button"
+                  title={selected ? `Use this slot for the selected visual (${b.title || b.id})` : b.title || b.id}
+                  onClick={() => selected && onAssignBox(b.id)}
+                  className={`absolute rounded-[14px] border-2 border-dashed border-outline/60 bg-surface-container/10 ${selected ? "hover:bg-secondary-container/20 cursor-copy" : "cursor-default"}`}
+                  style={{ left: b.x, top: b.y, width: b.w, height: b.h }}
+                >
+                  <span className="absolute -top-3 left-3 px-2.5 py-0.5 rounded-full bg-surface-container-high text-on-surface-variant font-code-sm text-[13px]">
+                    Slot {b.id.replace("box_", "#")} · unused
+                  </span>
+                </button>
+              );
+            })}
 
         {showBoxes &&
           mapping

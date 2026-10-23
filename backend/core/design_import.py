@@ -73,6 +73,7 @@ class DetectedBox(BaseModel):
     value: ValueStyle | None = None  # the card's main number (KPI cards), as the design draws it
     value_color: str | None = None  # data-value-color: colour for the KPI number (contract designs leave chart areas empty)
     label: str = ""  # short text drawn right above a small card (a filter's name over its dropdown)
+    role: str | None = None  # "title" (report title), "nav" (page navigation), or None
 
 
 class MappingItem(BaseModel):
@@ -264,9 +265,10 @@ _DETECT = r"""
       seen.set(a, t);
     }
     found = [...seen].map(([el, titleEl]) => ({el, titleEl}));
-    // A panel filling most of a card (e.g. a fake chart's plot area) belongs to that card.
+    // A panel filling most of a card belongs to that card; decorative child cards inside a parent card are ignored.
     const area = e => { const r = e.getBoundingClientRect(); return r.width * r.height; };
-    found = found.filter(b => !found.some(a => a !== b && a.el.contains(b.el) && area(b.el) >= 0.25 * area(a.el)));
+    const isHeaderBanner = e => e.tagName.toLowerCase() === 'header' || (rel(e).y < 50 && rel(e).w > W * 0.75);
+    found = found.filter(b => !found.some(a => a !== b && a.el.contains(b.el) && (!isHeaderBanner(a.el) || area(b.el) >= 0.25 * area(a.el))));
   }
 
   // Where the Power BI visual goes inside the card: the chart area when the HTML marks one,
@@ -474,6 +476,26 @@ def extract(html: str, allow_scripts: bool = False) -> Extraction:
             value=_value(b, b.get("value")), value_color=css_hex(b.get("value_color")),
             label=" ".join((b.get("label") or "").split())[:80],
         ))
+
+    # Filter out decorative child boxes fully contained inside a parent card (e.g. #14-#17 inside Key Insights)
+    is_header = lambda b: b.y < 50 and b.w > CANVAS_W * 0.75
+    parents = [b for b in boxes if not is_header(b) and b.w >= 160 and b.h >= 80]
+    decorative_ids = {
+        b.id for b in boxes
+        for p in parents
+        if b.id != p.id and (p.x <= b.x and p.y <= b.y and p.x + p.w >= b.x + b.w and p.y + p.h >= b.y + b.h)
+    }
+    if decorative_ids:
+        boxes = [b for b in boxes if b.id not in decorative_ids]
+
+    for b in boxes:
+        text_lower = (b.text or "").lower()
+        title_lower = (b.title or "").lower()
+        if (b.y < 80 and b.h <= 60 and ("overview" in text_lower or "detail" in text_lower or "page" in text_lower or b.id == "box_02") and b.w <= 400):
+            b.role = "nav"
+        elif (b.y < 80 and (b.w >= 200 or b.id == "box_01") and ("dashboard" in title_lower or "analytics" in title_lower or "performance" in title_lower or b.id == "box_01")):
+            b.role = "title"
+
     palette = _palette(data, boxes)
     chart = data.get("chart") or {}
     card = next((c.hex for c in palette if c.role == "card"), "#FFFFFF")

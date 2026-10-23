@@ -535,6 +535,7 @@ export interface DetectedBox {
   radius: number;
   title_font: string;
   title_color: string | null;
+  role?: string | null;
 }
 
 export type MatchMethod = "id" | "title" | "ai" | "manual" | "none";

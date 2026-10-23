@@ -758,14 +758,64 @@ def nav_button_json(page_num: int, target_num: int, target_page_name: str, label
     }
 
 
+def report_title_textbox_json(title: str, subtitle: str, x: int, y: int, w: int, h: int, page: int,
+                              tokens: dict[str, str], font_family: str = "Segoe UI", font_color: str | None = None) -> dict:
+    paragraphs = [
+        {"textRuns": [{"value": title, "textStyle": {"fontFamily": font_family, "fontSize": "16pt", "color": font_color or tokens.get("text", "#FFFFFF"), "fontWeight": "bold"}}]}
+    ]
+    if subtitle:
+        paragraphs.append(
+            {"textRuns": [{"value": subtitle, "textStyle": {"fontFamily": font_family, "fontSize": "10pt", "color": tokens.get("muted", "#94A3B8")}}]}
+        )
+    return {
+        "$schema": SCHEMAS["visual"],
+        "name": _id("title", str(page), title),
+        "position": {
+            "x": x,
+            "y": y,
+            "z": 100,
+            "height": h,
+            "width": w,
+            "tabOrder": 100,
+        },
+        "visual": {
+            "visualType": "textbox",
+            "objects": {"general": [{"properties": {"paragraphs": paragraphs}}]},
+            "visualContainerObjects": _bare_container(),
+            "drillFilterOtherVisuals": True,
+        },
+    }
+
+
 def design_nav_slots(pg: PageInput, labels: list[str]):
     """Button slots on the design's own page menu: an unmapped box titled like one of the pages is
-    that page's item; the other pages continue below it (a side menu) or beside it (top tabs)."""
+    that page's item; the other pages continue below it (a side menu) or beside it (top tabs).
+    If a single tab container box is detected (box_02 / role nav), it is partitioned across labels."""
     from core.planner import Box  # noqa: PLC0415
 
-    used = {m.box_id for m in pg.mapping if m.placed}
+    used = {m.box_id for m in pg.mapping if m.placed and m.box_id}
     norm = lambda s: " ".join(re.sub(r"[^a-z0-9]+", " ", s.lower()).split())  # noqa: E731
     wanted = {norm(lab): i for i, lab in enumerate(labels)}
+
+    # 1. Single tab container box holding the page tabs (e.g. box_02 with Overview and Details)
+    nav_box = next(
+        (b for b in pg.boxes if (getattr(b, "role", None) == "nav" or b.id == "box_02") and b.id not in used),
+        None,
+    )
+    if nav_box is None:
+        nav_box = next(
+            (b for b in pg.boxes if b.id not in used and b.h <= 60 and sum(1 for lab in labels if norm(lab) in norm(b.text or b.title)) >= min(2, len(labels))),
+            None,
+        )
+    if nav_box is not None:
+        b = nav_box
+        n_btn = max(1, len(labels))
+        gap = 4
+        btn_w = max(40, (b.w - (n_btn - 1) * gap) // n_btn)
+        slots = [Box(x=b.x + t * (btn_w + gap), y=b.y, w=btn_w, h=b.h) for t in range(n_btn)]
+        return slots
+
+    # 2. Individual anchor box
     anchor = next(((b, wanted[norm(b.title)]) for b in pg.boxes if b.id not in used and norm(b.title) in wanted and b.h <= 60), None)
     if anchor is None:
         return []
@@ -855,20 +905,45 @@ def _report_files(inp: BuildInputs, root: str) -> dict[str, bytes]:
             for out in (data, *extra):
                 files[f"{d}/pages/{names[n - 1]}/visuals/{out['name']}/visual.json"] = _json(out)
 
-    if len(pages) > 1:
-        for n in range(1, len(pages) + 1):
-            curr_page_name = names[n - 1]
-            pg = pages[n - 1]
-            labels = [p.plan.pages[0] if p.plan.pages else ("Overview" if t == 1 else f"Page {t}") for t, p in enumerate(pages, 1)]
-            # A design with its own page menu (a Stitch sidebar item named like a page) gets the buttons
-            # there; otherwise the slots the DashPilot templates draw their nav track under.
-            slots = design_nav_slots(pg, labels)
-            if not slots:
-                is_sidebar, sidebar_w = _is_sidebar_page(pg)
-                slots = nav_slots(len(pages), sidebar_w if is_sidebar else 0)
+        # Report title textbox if an unmapped title box is present in the design
+        used_boxes = {m.box_id for m in pg.mapping if m.placed and m.box_id}
+        title_box = next(
+            (b for b in pg.boxes if b.id not in used_boxes and (getattr(b, "role", None) == "title" or b.id == "box_01" or ("dashboard" in (b.title or "").lower() and b.y < 80))),
+            None,
+        )
+        if title_box is not None:
+            title_x = title_box.x
+            title_y = max(MARGIN, title_box.y)
+            right_boxes = [b for b in pg.boxes if b.id != title_box.id and b.x > title_x and b.y < title_y + 80 and b.y + b.h > title_y]
+            max_right = min((b.x for b in right_boxes), default=title_x + min(title_box.w, 360))
+            title_w = max(100, min(title_box.w, max_right - title_x - 12))
+            title_h = min(title_box.h, 60)
+            title_visual = report_title_textbox_json(
+                title=inp.plan.title,
+                subtitle=inp.plan.subtitle or "",
+                x=title_x,
+                y=title_y,
+                w=title_w,
+                h=title_h,
+                page=n,
+                tokens=tokens,
+                font_family=title_box.title_font or "Segoe UI",
+                font_color=title_box.title_color or tokens.get("text", "#FFFFFF"),
+            )
+            files[f"{d}/pages/{names[n - 1]}/visuals/{title_visual['name']}/visual.json"] = _json(title_visual)
+
+    for n in range(1, len(pages) + 1):
+        curr_page_name = names[n - 1]
+        pg = pages[n - 1]
+        labels = [p.plan.pages[0] if p.plan.pages else ("Overview" if t == 1 else f"Page {t}") for t, p in enumerate(pages, 1)]
+        slots = design_nav_slots(pg, labels)
+        if not slots and len(pages) > 1:
+            is_sidebar, sidebar_w = _is_sidebar_page(pg)
+            slots = nav_slots(len(pages), sidebar_w if is_sidebar else 0)
+        if slots and (len(pages) > 1 or len(slots) > 1):
             for t, slot in enumerate(slots, 1):
-                target_page_name = names[t - 1]
-                label = labels[t - 1]
+                target_page_name = names[min(t - 1, len(names) - 1)]
+                label = labels[t - 1] if t <= len(labels) else f"Page {t}"
                 btn_data = nav_button_json(
                     page_num=n, target_num=t, target_page_name=target_page_name,
                     label=label, x=slot.x, y=slot.y, w=slot.w, h=slot.h,
