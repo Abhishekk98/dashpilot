@@ -572,6 +572,7 @@ export interface FidelityReport {
   passed: boolean;
   threshold: number;
   card_threshold: number;
+  block_threshold?: number;
   /** "screenshot" = compared with the design tool's own screen.png; "render" = with our render of its HTML. */
   reference: "screenshot" | "render";
   render_match: number | null;

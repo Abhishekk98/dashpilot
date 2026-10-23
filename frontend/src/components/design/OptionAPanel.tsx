@@ -215,7 +215,11 @@ export function OptionAPanel({ projectId, visuals, design, blocked, selecting, o
               {chosen ? "Selected" : "Use this Stitch design"}
             </PillButton>
             {d.fidelity && !d.fidelity.passed && (
-              <span className="font-body-md text-xs text-error">Below the fidelity threshold: the build will need your OK in Step 8.</span>
+              <span className="font-body-md text-xs text-on-surface-variant">
+                {d.fidelity.overall < (d.fidelity.block_threshold ?? 0.70)
+                  ? "Below 70% fidelity: the build will need your OK in Step 8."
+                  : `Fidelity (${(d.fidelity.overall * 100).toFixed(0)}%) is below ${(d.fidelity.threshold * 100).toFixed(0)}%: build will proceed with a warning.`}
+              </span>
             )}
           </div>
         </div>

@@ -24,8 +24,16 @@ from pydantic import BaseModel
 from core.design_contract import CANVAS_H, CANVAS_W
 from core.design_import import DetectedBox, MappingItem
 
-THRESHOLD = 0.97  # overall
-CARD_THRESHOLD = 0.92
+try:
+    from app.config import get_settings
+    _settings = get_settings()
+    THRESHOLD = float(getattr(_settings, "fidelity_threshold", 0.80))
+    CARD_THRESHOLD = float(getattr(_settings, "fidelity_card_threshold", 0.80))
+    BLOCK_THRESHOLD = float(getattr(_settings, "fidelity_block_threshold", 0.70))
+except Exception:
+    THRESHOLD = 0.80  # overall default ~80%
+    CARD_THRESHOLD = 0.80
+    BLOCK_THRESHOLD = 0.70
 TOLERANCE = 28
 SCALE = 2  # compare at 640x360
 
@@ -43,6 +51,7 @@ class FidelityReport(BaseModel):
     passed: bool
     threshold: float = THRESHOLD
     card_threshold: float = CARD_THRESHOLD
+    block_threshold: float = BLOCK_THRESHOLD
     reference: Literal["screenshot", "render"]
     render_match: float | None = None  # our HTML render vs the tool's screenshot
     cards: list[CardFidelity] = []

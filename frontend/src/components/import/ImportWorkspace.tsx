@@ -107,8 +107,11 @@ export function ImportWorkspace() {
   const problems = useMemo(() => {
     const bad = data ? localProblems(data, mapping) : new Set<string>();
     const f = data?.design.fidelity;
-    // Cards that do not reproduce the design closely enough are flagged too (until the user accepts them).
-    if (f && !f.passed && !data?.design.fidelity_override) f.cards.filter((c) => !c.passed && c.visual_id).forEach((c) => bad.add(c.visual_id as string));
+    const blockThreshold = f?.block_threshold ?? 0.70;
+    // Cards below threshold are only blocking if overall fidelity is strictly below 70% (and not overridden).
+    if (f && f.overall < blockThreshold && !data?.design.fidelity_override) {
+      f.cards.filter((c) => !c.passed && c.visual_id).forEach((c) => bad.add(c.visual_id as string));
+    }
     return bad;
   }, [data, mapping]);
 
@@ -178,7 +181,9 @@ export function ImportWorkspace() {
   const placedCount = mapping.filter((m) => m.w > 0 && m.h > 0).length;
   const total = data?.visuals.length ?? 0;
   const autoMatched = d ? d.mapping.filter((m) => m.method !== "none").length : 0;
-  const fidelityOk = !d?.fidelity || d.fidelity.passed || d.fidelity_override;
+  const blockThreshold = d?.fidelity?.block_threshold ?? 0.70;
+  const fidelityBlocked = !!d?.fidelity && d.fidelity.overall < blockThreshold && !d.fidelity_override;
+  const fidelityOk = !fidelityBlocked;
   const complete = !!d && d.valid && !dirty && fidelityOk && problems.size === 0;
 
   return (

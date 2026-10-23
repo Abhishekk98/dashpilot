@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     storage_dir: Path = Path(__file__).resolve().parent.parent / "storage"
     max_upload_mb: int = 100
 
+    # Design fidelity gate settings (Step 8 import)
+    fidelity_threshold: float = 0.80  # overall threshold warning (default ~80%)
+    fidelity_card_threshold: float = 0.80  # per-card threshold warning (default ~80%)
+    fidelity_block_threshold: float = 0.70  # blocking threshold ("Build anyway" checkbox required only below 70%)
+
     # Stored as a comma-separated string so it can be set from a plain env var.
     cors_origins: str = "http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001"
 
