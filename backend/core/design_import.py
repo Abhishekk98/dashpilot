@@ -625,13 +625,13 @@ def _item(visual_id: str, box: DetectedBox, method: str, score: float, is_slicer
     if is_bigger and not box.visual_id:
         x = box.x + 8
         y = box.y + 8
-        w = box.w - 16
-        h = box.h - 16
+        w = max(box.w - 16, 40 if role == "slicer" else mw)
+        h = max(box.h - 16, 30 if role == "slicer" else mh)
     else:
         x = box.x
         y = box.y
-        w = max(box.w, 40 if role == "slicer" else mw)
-        h = max(box.h, 30 if role == "slicer" else mh)
+        w = max(box.w, 40) if role == "slicer" else box.w
+        h = max(box.h, 30) if role == "slicer" else box.h
     return MappingItem(visual_id=visual_id, box_id=box.id, x=x, y=y, w=w, h=h, method=method, score=score)
 
 
@@ -848,10 +848,7 @@ def match(plan: DashboardPlan, boxes: list[DetectedBox], llm: LLMProvider | None
 
     placed_items = [m for m in by_visual.values() if m.placed]
     if placed_items:
-        from core.design_layouts import resolve_overlaps  # noqa: PLC0415
-        resolve_overlaps(placed_items, min_gap=8)
-
-
+        resolve_mapping_overlaps(placed_items, min_gap=8)
 
     mapping = [by_visual.get(v.id) or MappingItem(visual_id=v.id) for v in plan.visuals]
     return mapping, notes
@@ -867,8 +864,126 @@ def _ai_prompt(visuals, boxes: list[DetectedBox]) -> str:
 
 # --- validation ------------------------------------------------------------------------------
 
-def validate_mapping(plan: DashboardPlan, mapping: list[MappingItem], boxes: list[DetectedBox]) -> list[str]:
+def resolve_mapping_overlaps(items: list[MappingItem], min_gap: int = 8) -> None:
+    """Ensure no two visuals collide (gap >= min_gap).
+    Does NOT modify items if no collision exists, and preserves original positions."""
+    placed = [m for m in items if m.placed]
+    if len(placed) < 2:
+        return
+
+    def _collides(a: MappingItem, b: MappingItem) -> bool:
+        return not (
+            a.x + a.w + min_gap <= b.x or
+            b.x + b.w + min_gap <= a.x or
+            a.y + a.h + min_gap <= b.y or
+            b.y + b.h + min_gap <= a.y
+        )
+
+    has_collision = False
+    for i, a in enumerate(placed):
+        for b in placed[i + 1:]:
+            if _collides(a, b):
+                has_collision = True
+                break
+        if has_collision:
+            break
+
+    if not has_collision:
+        return
+
+    sorted_items = sorted(placed, key=lambda m: (m.y, m.x))
+    resolved: list[MappingItem] = []
+
+    for item in sorted_items:
+        while any(_collides(item, other) for other in resolved):
+            colliding = next(other for other in resolved if _collides(item, other))
+            cand_x = colliding.x + colliding.w + min_gap
+            cand_item = MappingItem(visual_id=item.visual_id, x=cand_x, y=item.y, w=item.w, h=item.h)
+            if cand_x + item.w <= CANVAS_W - 16 and not any(_collides(cand_item, o) for o in resolved):
+                item.x = cand_x
+            else:
+                item.y = colliding.y + colliding.h + min_gap
+        resolved.append(item)
+
+
+def autofix_mapping(plan: DashboardPlan, mapping: list[MappingItem], boxes: list[DetectedBox]) -> list[str]:
+    """Auto-fix any validation issues (small slot, unmapped box, overlap, outside canvas)
+    so build is never blocked. Logs warnings for any auto-fixed problems."""
+    fixed_warnings: list[str] = []
+    titles = {v.id: v.title for v in plan.visuals}
+    visuals = {v.id: v for v in plan.visuals}
+    box_ids = {b.id for b in boxes}
+
+    by_visual: dict[str, MappingItem] = {}
+    for m in mapping:
+        if m.visual_id in titles and m.visual_id not in by_visual:
+            by_visual[m.visual_id] = m
+
+    used_boxes: set[str] = set()
+    for m in by_visual.values():
+        if m.box_id:
+            if m.box_id not in box_ids or m.box_id in used_boxes:
+                logger.warning("Auto-fixing box reuse for visual '%s': slot '%s' already used", m.visual_id, m.box_id)
+                fixed_warnings.append(f"Visual '{titles.get(m.visual_id, m.visual_id)}' slot conflict auto-resolved.")
+                m.box_id = None
+                m.pbi_title = True
+            else:
+                used_boxes.add(m.box_id)
+
+    for vid, v in visuals.items():
+        m = by_visual.get(vid)
+        if m is None or not m.placed:
+            mw, mh = visual_min_size(v)
+            dw = max(mw, 200 if v.role == "slicer" else 190 if v.role == "kpi" else 380)
+            dh = max(mh, 36 if v.role == "slicer" else 92 if v.role == "kpi" else 240)
+            bottom_y = max((item.y + item.h for item in by_visual.values() if item.placed), default=72)
+            new_item = MappingItem(
+                visual_id=vid, box_id=None, x=16, y=min(bottom_y + 12, CANVAS_H - dh - 16), w=dw, h=dh,
+                method="fallback", score=0.1, pbi_title=True,
+            )
+            by_visual[vid] = new_item
+            logger.warning("Auto-placed unmapped visual '%s' onto grid at (%d, %d)", v.title, new_item.x, new_item.y)
+            fixed_warnings.append(f"Unmapped visual '{v.title}' auto-placed onto grid.")
+
+    placed = [by_visual[v.id] for v in plan.visuals if v.id in by_visual]
+
+    for m in placed:
+        v = visuals.get(m.visual_id)
+        if v:
+            mw, mh = visual_min_size(v)
+            if m.w < mw:
+                logger.warning("Auto-expanded width of '%s' from %d to min %d", v.title, m.w, mw)
+                fixed_warnings.append(f"Visual '{v.title}' width auto-expanded to minimum {mw}px.")
+                m.w = mw
+            if m.h < mh:
+                logger.warning("Auto-expanded height of '%s' from %d to min %d", v.title, m.h, mh)
+                fixed_warnings.append(f"Visual '{v.title}' height auto-expanded to minimum {mh}px.")
+                m.h = mh
+
+    for m in placed:
+        if m.x < 16:
+            m.x = 16
+        if m.x + m.w > CANVAS_W - 16:
+            m.x = max(16, CANVAS_W - 16 - m.w)
+        if m.y < 16:
+            m.y = 16
+        if m.y + m.h > CANVAS_H - 16:
+            m.y = max(16, CANVAS_H - 16 - m.h)
+
+    resolve_mapping_overlaps(placed, min_gap=8)
+
+    mapping.clear()
+    for v in plan.visuals:
+        mapping.append(by_visual[v.id])
+
+    return fixed_warnings
+
+
+def validate_mapping(plan: DashboardPlan, mapping: list[MappingItem], boxes: list[DetectedBox], autofix: bool = False) -> list[str]:
     """Validate visual mapping rules (slicers < 30px auto-expand to min 30px with overlap resolution)."""
+    if autofix:
+        autofix_mapping(plan, mapping, boxes)
+
     issues: list[str] = []
     titles = {v.id: v.title for v in plan.visuals}
     visuals = {v.id: v for v in plan.visuals}
@@ -913,20 +1028,7 @@ def validate_mapping(plan: DashboardPlan, mapping: list[MappingItem], boxes: lis
                 slicer_expanded = True
 
     if slicer_expanded:
-        has_overlap = False
-        for i, a in enumerate(placed):
-            for b in placed[i + 1:]:
-                if overlap(a, b):
-                    has_overlap = True
-                    break
-            if has_overlap:
-                break
-        if has_overlap:
-            from core.design_layouts import resolve_overlaps  # noqa: PLC0415
-            resolve_overlaps(placed, min_gap=12)
-            for m in placed:
-                m.x = max(16, min(m.x, CANVAS_W - m.w - 16))
-                m.y = max(16, min(m.y, CANVAS_H - m.h - 16))
+        resolve_mapping_overlaps(placed, min_gap=8)
 
     for m in placed:
         v = visuals.get(m.visual_id)
@@ -941,6 +1043,7 @@ def validate_mapping(plan: DashboardPlan, mapping: list[MappingItem], boxes: lis
             if overlap(a, b):
                 issues.append(f"'{titles[a.visual_id]}' overlaps '{titles[b.visual_id]}'.")
     return list(dict.fromkeys(issues))
+
 
 
 # --- background ------------------------------------------------------------------------------

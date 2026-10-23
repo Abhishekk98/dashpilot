@@ -23,7 +23,7 @@ from core.context_service import get_context
 from core.design_ai import plan_signature
 from core.design_fidelity import FidelityReport, score
 from core.design_import import (
-    DetectedBox, MappingItem, ThemeColor, build_theme, extract, match, named_by_label, render_design, title_kept, validate_mapping,
+    DetectedBox, MappingItem, ThemeColor, autofix_mapping, build_theme, extract, match, named_by_label, render_design, title_kept, validate_mapping,
 )
 from core.planner import DashboardPlan, PlanVisual, page_plan
 from core.planner_service import DESIGN_FILE, PLAN_FILE
@@ -138,8 +138,13 @@ def _stitch_screen(store: ProjectStore, project: Project, page: int = 1) -> byte
 
 def _finish(store: ProjectStore, project: Project, plan: DashboardPlan, imp: DesignImport, html: str, page: int = 1,
             pages: list[str] | None = None) -> ImportResponse:
+    if imp.source == "option_a":
+        fix_notes = autofix_mapping(plan, imp.mapping, imp.boxes)
+        if fix_notes:
+            imp.notes.extend(fix_notes)
     imp.issues = validate_mapping(plan, imp.mapping, imp.boxes)
     imp.valid = not imp.issues
+
     folder = page_dir(store, project, page)
     boxes = {b.id: b for b in imp.boxes}
     titles = {v.id: v.title for v in plan.visuals}

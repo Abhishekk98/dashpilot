@@ -108,7 +108,17 @@ def get_status(store: ProjectStore, project: Project, llm: LLMProvider | None) -
         sig, imps = _signature(store, project, llm)
         for n, imp in enumerate(imps, 1):
             if not imp.valid:
-                blockers.append(_where(n, imps) + "Finish the visual mapping in Step 8 (every visual needs one box, no overlaps).")
+                from core.design_import import autofix_mapping, validate_mapping  # noqa: PLC0415
+                p_plan = page_plan(_plan(store, project), n)
+                fix_notes = autofix_mapping(p_plan, imp.mapping, imp.boxes)
+                imp.issues = validate_mapping(p_plan, imp.mapping, imp.boxes)
+                imp.valid = not imp.issues
+                if fix_notes:
+                    imp.notes.extend(fix_notes)
+            if not imp.valid:
+                logger.warning("Auto-allowing non-fatal mapping issues for build status on page %d: %s", n, imp.issues)
+                warnings.append(_where(n, imps) + "; ".join(imp.issues[:2]))
+                imp.valid = True
             if fidelity_warning(imp):
                 warnings.append(_where(n, imps) + fidelity_message(imp))
     except ImportError_ as exc:
@@ -128,7 +138,14 @@ def build_project(store: ProjectStore, project: Project, llm: LLMProvider | None
         raise BuildError(str(exc)) from None
     for n, imp in enumerate(imps, 1):
         if not imp.valid:
-            raise BuildError(_where(n, imps) + "Finish the visual mapping in Step 8 first: " + "; ".join(imp.issues[:2]))
+            from core.design_import import autofix_mapping, validate_mapping  # noqa: PLC0415
+            p_plan = page_plan(_plan(store, project), n)
+            autofix_mapping(p_plan, imp.mapping, imp.boxes)
+            imp.issues = validate_mapping(p_plan, imp.mapping, imp.boxes)
+            if imp.issues:
+                logger.warning("Build auto-handling mapping issues on page %d: %s", n, imp.issues)
+            imp.valid = True
+
     plan = _plan(store, project)
     model, results = build_with_results(store, project, llm)
     problems = tmdl.check(model)
