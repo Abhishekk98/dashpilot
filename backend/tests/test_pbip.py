@@ -509,3 +509,56 @@ def test_nav_buttons_sit_on_the_designs_own_page_menu(shop):
     slots = design_nav_slots(page, ["Overview", "Details"])
     assert [(s.x, s.y, s.w, s.h) for s in slots] == [(27, 116, 165, 36), (27, 164, 165, 36)]
     assert design_nav_slots(shop.pages[0], ["Overview", "Details"]) == []  # no menu in the design: template slots
+
+
+def test_all_planned_visuals_equal_build_visuals(shop):
+    """Every planned KPI/chart/slicer/insights must appear in the built report (Part 1)."""
+    files = build(shop)
+    visuals = _visuals(files)
+    built_visuals = [v for v in visuals if not _is_extra(v) and v["visual"]["visualType"] != "actionButton"]
+    planned_count = sum(len(pg.plan.visuals) for pg in shop.pages)
+    assert len(built_visuals) == planned_count, f"Expected {planned_count} built visuals, got {len(built_visuals)}"
+
+    # Test with unplaced / dropped mapping items: build must fallback and include all of them
+    empty_mapping_pages = [
+        PageInput(pg.plan, pg.boxes, [MappingItem(visual_id=v.id) for v in pg.plan.visuals], pg.background)
+        for pg in shop.pages
+    ]
+    unmapped_shop = shop.__class__(**{**shop.__dict__, "mapping": empty_mapping_pages[0].mapping, "extra_pages": empty_mapping_pages[1:]})
+    unmapped_files = build(unmapped_shop)
+    unmapped_built = [v for v in _visuals(unmapped_files) if not _is_extra(v) and v["visual"]["visualType"] != "actionButton"]
+    assert len(unmapped_built) == planned_count, f"Fallback failed to keep all visuals: {len(unmapped_built)} vs {planned_count}"
+
+
+def test_fallback_mapping_nearest_type_and_warnings():
+    """Unmatched boxes map to nearest visual type with warnings logged, never skipped."""
+    from core.design_import import match
+    from core.planner import Box, DashboardPlan, PlanVisual
+
+    test_plan = DashboardPlan(
+        title="Test Store", pages=["Overview"],
+        visuals=[
+            PlanVisual(id="kpi_1", role="kpi", type="card", title="Revenue", measures=["Total Sales"], box=Box(x=16, y=72, w=200, h=96)),
+            PlanVisual(id="chart_1", role="chart", type="line", title="Daily Orders Trend", measures=["Orders"], dimension="Date", box=Box(x=16, y=184, w=600, h=300)),
+            PlanVisual(id="slicer_1", role="slicer", type="slicer", title="Date Filter", measures=[], dimension="Date", box=Box(x=600, y=16, w=200, h=40)),
+        ]
+    )
+    # Stitch boxes with totally unrelated or missing titles
+    boxes = [
+        DetectedBox(id="b_pill", x=500, y=20, w=180, h=36, title="Pill Container", text="All values"),
+        DetectedBox(id="b_card", x=20, y=80, w=220, h=100, title="Widget Box", text="$12,400 +10%"),
+        DetectedBox(id="b_chart", x=20, y=200, w=580, h=280, title="Chart Box", text="Timeline"),
+    ]
+    mapping, notes = match(test_plan, boxes)
+    assert len(mapping) == 3
+    assert all(m.placed for m in mapping)
+    by_vid = {m.visual_id: m for m in mapping}
+    # Slicer should match b_pill (nearest type)
+    assert by_vid["slicer_1"].box_id == "b_pill"
+    # KPI should match b_card
+    assert by_vid["kpi_1"].box_id == "b_card"
+    # Chart should match b_chart
+    assert by_vid["chart_1"].box_id == "b_chart"
+    # Fallback notes should be logged
+    assert any("Fallback" in n for n in notes)
+

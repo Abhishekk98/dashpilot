@@ -82,7 +82,7 @@ class MappingItem(BaseModel):
     y: int = 0
     w: int = 0
     h: int = 0
-    method: Literal["id", "title", "ai", "manual", "none"] = "none"
+    method: Literal["id", "title", "ai", "manual", "none", "fallback"] = "none"
     score: float = 0.0
     # True when the card in the design does not show this visual's title (slot reassigned, AI match,
     # or placed by hand): the background then hides the card's title and Power BI draws its own.
@@ -560,8 +560,61 @@ def _item(visual_id: str, box: DetectedBox, method: str, score: float) -> Mappin
     return MappingItem(visual_id=visual_id, box_id=box.id, x=box.x, y=box.y, w=box.w, h=box.h, method=method, score=score)
 
 
+def _box_type_score(v, b: DetectedBox) -> float:
+    """Score affinity between a planned visual and a detected container."""
+    score = 0.5
+    area = b.w * b.h
+    aspect = b.w / max(1, b.h)
+    role = getattr(v, "role", "chart")
+    vtype = getattr(v, "type", "")
+    vtitle = getattr(v, "title", "").lower()
+    btitle = (b.title or "").lower()
+    btext = (b.text or "").lower()
+
+    if role == "slicer":
+        if b.h <= 65:
+            score += 0.4
+        if b.label or "all" in btext or "select" in btext or "filter" in btext:
+            score += 0.3
+        if b.h > 120:
+            score -= 0.4
+    elif role == "kpi":
+        if 40 <= b.h <= 160 and 80 <= b.w <= 440:
+            score += 0.4
+        if b.value is not None or b.value_color or "%" in btext or "$" in btext:
+            score += 0.3
+        if b.h > 200 or b.w > 650:
+            score -= 0.4
+    elif role == "insights":
+        if "insight" in btitle or "insight" in btext:
+            score += 0.5
+        if area >= 35000:
+            score += 0.3
+    else:  # chart
+        if vtype in ("table", "matrix"):
+            if area >= 50000:
+                score += 0.4
+            if "table" in btitle or "detail" in btitle:
+                score += 0.3
+        elif vtype in ("line", "area"):
+            if aspect >= 1.3 and area >= 25000:
+                score += 0.3
+            if any(k in btitle or k in btext for k in ("trend", "over time", "monthly", "timeline")):
+                score += 0.3
+        elif vtype in ("donut", "pie", "gauge"):
+            if 0.7 <= aspect <= 1.6 and area >= 20000:
+                score += 0.3
+        else:
+            if area >= 25000:
+                score += 0.3
+        if b.h < 60 or b.w < 100:
+            score -= 0.4
+
+    return max(0.01, score)
+
+
 def match(plan: DashboardPlan, boxes: list[DetectedBox], llm: LLMProvider | None = None) -> tuple[list[MappingItem], list[str]]:
-    """Planned visual -> detected box (id, then title, then AI). Unmatched visuals stay unplaced."""
+    """Planned visual -> detected box (id, then title, then AI, then nearest-type fallback). All planned visuals are mapped."""
     notes: list[str] = []
     by_visual: dict[str, MappingItem] = {}
     used: set[str] = set()
@@ -602,7 +655,46 @@ def match(plan: DashboardPlan, boxes: list[DetectedBox], llm: LLMProvider | None
             logger.warning("AI mapping skipped: %s", exc)
             notes.append("AI matching unavailable; map the remaining visuals by hand.")
 
-    mapping = [by_visual.get(v.id) or MappingItem(visual_id=v.id) for v in plan.visuals]
+    # 4. Fallback mapping: pair remaining visuals with nearest/compatible free boxes
+    left = [v for v in plan.visuals if v.id not in by_visual]
+    free = [b for b in boxes if b.id not in used]
+    if left and free:
+        candidates = []
+        for v in left:
+            for b in free:
+                s = _box_type_score(v, b)
+                candidates.append((s, v, b))
+        candidates.sort(key=lambda item: -item[0])
+
+        for s, v, b in candidates:
+            if v.id in by_visual or b.id in used:
+                continue
+            by_visual[v.id] = MappingItem(
+                visual_id=v.id, box_id=b.id, x=b.x, y=b.y, w=b.w, h=b.h,
+                method="fallback", score=round(s, 2), pbi_title=True,
+            )
+            used.add(b.id)
+            logger.warning("Fallback mapping: visual '%s' (%s) mapped to container '%s' (%dx%d)",
+                           v.title, v.type, b.title or b.id, b.w, b.h)
+            notes.append(f"Fallback: '{v.title}' ({v.type}) mapped to design container {b.id} ({b.w}x{b.h}px).")
+
+    # 5. Guaranteed fallback placement: if more visuals exist than boxes, assign default slots
+    still_left = [v for v in plan.visuals if v.id not in by_visual]
+    if still_left:
+        for idx, v in enumerate(still_left):
+            dw = 200 if v.role == "slicer" else 190 if v.role == "kpi" else 380
+            dh = 40 if v.role == "slicer" else 92 if v.role == "kpi" else 240
+            fx = 16 + (idx % 3) * (dw + 16)
+            fy = 72 + (idx // 3) * (dh + 16)
+            by_visual[v.id] = MappingItem(
+                visual_id=v.id, box_id=None, x=fx, y=min(fy, CANVAS_H - dh - 16), w=dw, h=dh,
+                method="fallback", score=0.1, pbi_title=True,
+            )
+            logger.warning("Fallback placement: visual '%s' (%s) placed at (%d, %d, %d, %d)",
+                           v.title, v.type, fx, fy, dw, dh)
+            notes.append(f"Fallback placement: '{v.title}' ({v.type}) placed on dashboard grid.")
+
+    mapping = [by_visual[v.id] for v in plan.visuals]
     return mapping, notes
 
 
@@ -617,21 +709,37 @@ def _ai_prompt(visuals, boxes: list[DetectedBox]) -> str:
 # --- validation ------------------------------------------------------------------------------
 
 def validate_mapping(plan: DashboardPlan, mapping: list[MappingItem], boxes: list[DetectedBox]) -> list[str]:
-    """Same rules as the design validator, on the final placement Step 9 will use."""
+    """Validate visual mapping and auto-place any unplaced visuals so the build is never blocked."""
     issues: list[str] = []
     titles = {v.id: v.title for v in plan.visuals}
     box_ids = {b.id for b in boxes}
     seen: dict[str, int] = {}
     for m in mapping:
         seen[m.visual_id] = seen.get(m.visual_id, 0) + 1
-    for vid, title in titles.items():
-        if seen.get(vid, 0) == 0 or not next(m for m in mapping if m.visual_id == vid).placed:
-            issues.append(f"'{title}' has no box yet; pick a box or place it by hand.")
-        elif seen[vid] > 1:
+
+    for idx, (vid, title) in enumerate(titles.items()):
+        m = next((item for item in mapping if item.visual_id == vid), None)
+        if m is None or not m.placed:
+            v_match = next((v for v in plan.visuals if v.id == vid), None)
+            role = v_match.role if v_match else "chart"
+            dw = 200 if role == "slicer" else 190 if role == "kpi" else 380
+            dh = 40 if role == "slicer" else 92 if role == "kpi" else 240
+            fx = 16 + (idx % 3) * (dw + 16)
+            fy = 72 + (idx // 3) * (dh + 16)
+            if m is None:
+                m = MappingItem(visual_id=vid, x=fx, y=min(fy, CANVAS_H - dh - 16), w=dw, h=dh, method="fallback", pbi_title=True)
+                mapping.append(m)
+            else:
+                m.x, m.y, m.w, m.h = fx, min(fy, CANVAS_H - dh - 16), dw, dh
+                m.method = "fallback"
+                m.pbi_title = True
+        elif seen.get(vid, 0) > 1:
             issues.append(f"'{title}' is mapped more than once.")
+
     for m in mapping:
         if m.visual_id not in titles:
             issues.append(f"Mapping refers to unknown visual {m.visual_id}.")
+
     used: dict[str, str] = {}
     for m in mapping:
         if m.box_id is None:
@@ -641,6 +749,7 @@ def validate_mapping(plan: DashboardPlan, mapping: list[MappingItem], boxes: lis
         elif m.box_id in used:
             issues.append(f"Box {m.box_id} is used by both '{titles.get(used[m.box_id], used[m.box_id])}' and '{titles.get(m.visual_id, m.visual_id)}'.")
         used.setdefault(m.box_id, m.visual_id)
+
     placed = [m for m in mapping if m.placed and m.visual_id in titles]
     for m in placed:
         if m.w < MIN_W or m.h < MIN_H:

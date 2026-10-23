@@ -32,7 +32,7 @@ from core.design_import import DetectedBox, MappingItem
 from core.modelling import ModelPlan
 from core.pbip_open import OPEN_CMD, OPEN_CMD_NAME
 from core.design_layouts import nav_slots
-from core.planner import MARGIN, DashboardPlan, PlanVisual
+from core.planner import CANVAS_H, CANVAS_W, MARGIN, DashboardPlan, PlanVisual
 from core import tmdl
 
 TEMPLATES = Path(__file__).resolve().parent.parent / "templates" / "visuals"
@@ -831,7 +831,11 @@ def _report_files(inp: BuildInputs, root: str) -> dict[str, bytes]:
         for order, v in enumerate(pg.plan.visuals):
             item = mapping.get(v.id)
             if item is None or not item.placed:
-                continue
+                dw = 200 if v.role == "slicer" else 190 if v.role == "kpi" else 380
+                dh = 40 if v.role == "slicer" else 92 if v.role == "kpi" else 240
+                fx = MARGIN + (order % 3) * (dw + 12)
+                fy = 72 + (order // 3) * (dh + 12)
+                item = MappingItem(visual_id=v.id, x=fx, y=min(fy, CANVAS_H - dh - MARGIN), w=dw, h=dh, method="fallback", pbi_title=True)
             box = boxes.get(item.box_id or "")
             extra: list[dict] = []
             rect = None
