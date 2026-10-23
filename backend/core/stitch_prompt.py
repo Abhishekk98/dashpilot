@@ -1,17 +1,18 @@
 """Google Stitch prompt for the planned dashboard.
 
-Generates a focused, high-level prompt specifying:
+Generates a focused content-first prompt specifying:
 - Dashboard title & pages
 - Per-page KPI cards with exact measure names
 - Charts with type and dimension/measure fields
 - Slicers (filters)
 - AI insights panel
-- Left sidebar navigation
-- Style: premium, futuristic, advanced layout, 1280x720 Power BI canvas, dark/glass theme, sidebar navigation.
+- Required page navigation
+- Creative, premium styling delegated to Stitch with dynamic aesthetic hints.
 """
 
 from __future__ import annotations
 
+import random
 from typing import Literal
 
 from pydantic import BaseModel
@@ -29,7 +30,16 @@ STYLES: dict[str, tuple[str, str, str]] = {  # id -> (label, direction, card sty
     "neon_tech": ("Neon Tech", "bold neon tech on a deep navy canvas, high contrast", "dark cards with a thin neon outline and cyber glow"),
 }
 
-DARK = {"dark_futuristic": ("#0A0E1A", "#F2F5FA"), "neon_tech": ("#080C16", "#EAF2FF"), "minimal_corporate": ("#0D1117", "#E6EDF3")}
+STYLE_HINTS: list[str] = [
+    "STYLE HINT: Cyberpunk Neon HUD — deep obsidian canvas with sharp luminous cyan/electric-amber glowing accents, frosted translucent dark cards, and sleek telemetry rings.",
+    "STYLE HINT: Frosted Glassmorphism Luxe — soft gradient dark backdrop, glass cards with blurred backdrop-filter, 1px iridescent white borders, and floating depth.",
+    "STYLE HINT: Bento Grid Executive — asymmetric modular cards, bold typography, deep charcoal surfaces, vibrant emerald status indicators, and clean editorial structure.",
+    "STYLE HINT: Tokyo Midnight Command Center — pitch-black theme, high-contrast neon violet and acid-lime accents, pill-shaped tags, and futuristic telemetry widgets.",
+    "STYLE HINT: Titanium Dark Minimalist — matte dark-steel surfaces, razor-sharp architectural borders, amber telemetry highlights, and high-density metric widgets.",
+    "STYLE HINT: Aurora Gradient Dream — layered deep indigo and plum canvas, iridescent aqua/violet border glows, ultra-modern typography, and floating elevation.",
+    "STYLE HINT: Neo-Brutalist Cyber Analytics — bold high-contrast outlines, deep navy canvas, electric yellow and hot-pink pill badges, and structured modular blocks.",
+    "STYLE HINT: Stealth Aero Glass — stealth matte carbon canvas, smoky translucent panels with subtle inner highlights, electric-blue accents, and modern cockpit layout.",
+]
 
 KIND = {
     "card": "KPI card", "line": "line chart", "area": "area chart", "clustered_bar": "clustered bar chart (horizontal)",
@@ -54,9 +64,7 @@ def _field(v: PlanVisual) -> str:
 def build(plan: DashboardPlan, context: BusinessContext, style: StitchStyle = "dark_futuristic", questions: list[str] | None = None,
           all_pages: list[str] | None = None) -> StitchPrompt:
     """Prompt for one page (`plan` is planner.page_plan); `all_pages` names every page for the menu."""
-    label, direction, cards = STYLES.get(style, STYLES["dark_futuristic"])
-    p = context.palette
-    canvas, text = DARK.get(style, (p.canvas, p.base))
+    style_hint = random.choice(STYLE_HINTS)
     company = context.company_name or plan.title.removesuffix(" Performance Dashboard")
 
     curr_page = plan.pages[0] if plan.pages else "Overview"
@@ -64,9 +72,9 @@ def build(plan: DashboardPlan, context: BusinessContext, style: StitchStyle = "d
     pages_str = ", ".join(f'"{pg}"' for pg in pages_list)
 
     slicers = [v for v in plan.visuals if v.role == "slicer"]
-    slicers_lines = [f'- Filter dropdown "{s.title}" (field: {_field(s) or s.title}); write the name "{s.title}" just above or inside the dropdown'
+    slicers_lines = [f'- Filter dropdown "{s.title}" (field: {_field(s) or s.title}); write the name "{s.title}" clearly'
                      for s in slicers]
-    slicers_block = "\n".join(slicers_lines) if slicers_lines else "- A date range filter dropdown"
+    slicers_block = "\n".join(slicers_lines) if slicers_lines else "- Date range filter dropdown"
 
     kpis = [v for v in plan.visuals if v.role == "kpi"]
     kpis_lines = []
@@ -81,43 +89,40 @@ def build(plan: DashboardPlan, context: BusinessContext, style: StitchStyle = "d
         ctype = KIND.get(c.type, c.type)
         m_str = ", ".join(f"[{m}]" for m in c.measures) or "metric"
         dim_str = f"by {_field(c)}" if c.dimension else ""
-        charts_lines.append(f'- {ctype.capitalize()}: "{c.title}" (Measures: {m_str} {dim_str})')
+        charts_lines.append(f'- {ctype.capitalize()}: "{c.title}" (Type: {c.type}, Measures: {m_str} {dim_str})')
     charts_block = "\n".join(charts_lines) if charts_lines else "- Charts showing trends and category distributions"
 
     insights = [v for v in plan.visuals if v.role == "insights"]
-    insights_title = insights[0].title if insights else "Key Insights"
+    insights_lines = [f'- Insights panel: "{v.title}"' for v in insights]
+    insights_block = "\n".join(insights_lines) if insights_lines else '- Key Insights panel: "Key Insights"'
 
-    menu = (f'- Left sidebar with a logo placeholder and one menu item per page, labelled exactly {pages_str}; '
-            f'"{curr_page}" is the active item.' if len(pages_list) > 1 else "- Left sidebar with a logo placeholder (single page, no page menu).")
-    prompt = f"""Design one page of a Power BI dashboard for {company}: page "{curr_page}" of {len(pages_list)} ({pages_str}).
+    nav_line = (
+        f'Page navigation is REQUIRED: provide navigation buttons/menu for all {len(pages_list)} pages ({pages_str}). Current active page is "{curr_page}".'
+        if len(pages_list) > 1
+        else 'Single-page dashboard: header with title and filter controls required.'
+    )
 
-STYLE:
-premium, futuristic, advanced layout, 1280x720 Power BI canvas, dark/glass theme, sidebar navigation
-- Look: {label}, {direction}
-- Colours: canvas {canvas}, text {text}, accent {p.accent}
-- Cards: {cards}, 14-16px rounded corners, consistent 16px grid
+    prompt = f"""Create a premium, futuristic, creative Power BI dashboard (1280x720 per page). Use an advanced, non-generic layout of your choice: e.g. glassmorphism, neon dark, bento grid, sidebar navigation. Every element must fit within the page with no overlap.
 
-TITLE: "{plan.title}"
+{style_hint}
 
-NAVIGATION:
-{menu}
+DASHBOARD: {company} — Page "{curr_page}" of {len(pages_list)} ({pages_str})
+PAGE TITLE: "{plan.title}"
 
-FILTERS:
+PAGE NAVIGATION (REQUIRED):
+- {nav_line}
+
+FILTERS / SLICERS:
 {slicers_block}
 
-KPI CARDS (title at the top; under it a placeholder value, a small vs PY change and a sparkline, which Power BI replaces with live visuals):
+KPI CARDS:
 {kpis_block}
 
-CHARTS (title at the top; the rest of the card is the chart area that Power BI fills):
+CHARTS:
 {charts_block}
 
-INSIGHTS PANEL:
-- "{insights_title}": 3 numbered points
-
-RULES:
-1. The page is exactly 1280px wide and 720px tall (overflow hidden, no scrolling).
-2. Every card is its own container and shows its title exactly as written above.
-3. Power BI native chart types only. Use "Segoe UI" for chart text.
-4. No other text: no status lines, sync times, data source names, canvas sizes or extra badges."""
+INSIGHTS:
+{insights_block}"""
 
     return StitchPrompt(style=style, styles=[{"id": k, "label": v[0]} for k, v in STYLES.items()], prompt=prompt, visuals=len(plan.visuals))
+

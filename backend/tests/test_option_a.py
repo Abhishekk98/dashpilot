@@ -88,10 +88,16 @@ def test_prompt_has_exact_layout_and_rules(plan):
     text = p.prompt
     for v in plan.visuals:
         assert f'"{v.title}"' in text
-    assert "1280x720 Power BI canvas" in text and "exactly as written" in text and "Segoe UI" in text
-    assert "Dark Futuristic" in text and "sidebar navigation" in text and ctx.palette.accent in text
-    assert "KPI CARDS" in text and "CHARTS" in text and "INSIGHTS PANEL" in text and "No other text" in text
+    assert "Create a premium, futuristic, creative Power BI dashboard (1280x720 per page)" in text
+    assert "Use an advanced, non-generic layout of your choice: e.g. glassmorphism, neon dark, bento grid, sidebar navigation." in text
+    assert "Every element must fit within the page with no overlap." in text
+    assert "KPI CARDS:" in text and "CHARTS:" in text and "FILTERS / SLICERS:" in text and "PAGE NAVIGATION" in text
+    assert "STYLE HINT:" in text
     assert {s["id"] for s in p.styles} >= {"dark_futuristic", "light_elegant", "glassmorphism", "minimal_corporate", "neon_tech"}
+
+    # Verify dynamic variation across calls
+    prompts = {build_prompt(plan, ctx, "dark_futuristic").prompt for _ in range(10)}
+    assert len(prompts) > 1  # random style hints ensure variety
 
 
 # --- exact import -------------------------------------------------------------------------------
