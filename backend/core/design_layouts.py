@@ -700,10 +700,21 @@ def paginate_visuals(
         if m and getattr(m, "placed", False):
             v.box = _b(m.x, m.y, m.w, m.h)
 
-    resolve_overlaps(visuals, canvas_w=canvas_w, canvas_h=canvas_h, min_gap=min_gap, margin=margin, top_offset=top_offset)
+    has_collision = False
+    for i, a in enumerate(visuals):
+        ax, ay, aw, ah = a.box.x, a.box.y, a.box.w, a.box.h
+        for b in visuals[i + 1:]:
+            bx, by, bw, bh = b.box.x, b.box.y, b.box.w, b.box.h
+            if rects_intersect((ax, ay, aw, ah), (bx, by, bw, bh), min_gap=min_gap):
+                has_collision = True
+                break
+        if has_collision:
+            break
+    if has_collision:
+        resolve_overlaps(visuals, canvas_w=canvas_w, canvas_h=canvas_h, min_gap=min_gap, margin=margin, top_offset=top_offset)
 
     pages: list[PageSlice] = []
-    max_usable_h = canvas_h - margin
+    max_usable_h = canvas_h
     current_page_num = 1
     remaining = list(visuals)
 

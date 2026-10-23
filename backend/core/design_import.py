@@ -819,7 +819,7 @@ def match(plan: DashboardPlan, boxes: list[DetectedBox], llm: LLMProvider | None
                         used.add(best_slot.id)
                         logger.warning("Auto-fit placement: visual '%s' (%s) mapped to slot '%s' (%dx%d)",
                                        v.title, v.type, best_slot.title or best_slot.id, best_slot.w, best_slot.h)
-                        notes.append(f"Auto-fit: '{v.title}' placed in template slot {best_slot.id} ({best_slot.w}x{best_slot.h}px).")
+                        notes.append(f"Fallback auto-fit: '{v.title}' placed in template slot {best_slot.id} ({best_slot.w}x{best_slot.h}px).")
 
         # 5. Guaranteed auto-grid placement: if slots are not enough or too small, build clean auto-grid in same theme
         still_left = [v for v in plan.visuals if v.id not in by_visual]
@@ -844,7 +844,7 @@ def match(plan: DashboardPlan, boxes: list[DetectedBox], llm: LLMProvider | None
                 curr_x += dw + gap
                 logger.warning("Auto-grid placement: visual '%s' (%s) placed at (%d, %d, %d, %d)",
                                v.title, v.type, curr_x - dw - gap, curr_y, dw, dh)
-                notes.append(f"Auto-grid placement: '{v.title}' ({v.type}) placed on dashboard grid.")
+                notes.append(f"Fallback auto-grid: '{v.title}' ({v.type}) placed on dashboard grid.")
 
     placed_items = [m for m in by_visual.values() if m.placed]
     if placed_items:
@@ -1036,7 +1036,10 @@ def validate_mapping(plan: DashboardPlan, mapping: list[MappingItem], boxes: lis
         if (v is None or v.role != "slicer") and (m.w < MIN_W or m.h < MIN_H):
             issues.append(f"'{titles[m.visual_id]}' is too small ({m.w}x{m.h}px; at least {MIN_W}x{MIN_H}).")
         if m.x < 0 or m.y < 0 or m.x + m.w > CANVAS_W or m.y + m.h > CANVAS_H:
-            issues.append(f"'{titles[m.visual_id]}' is outside the 1280x720 canvas.")
+            if autofix and m.y + m.h > CANVAS_H and m.x >= 0 and m.y >= 0 and m.x + m.w <= CANVAS_W:
+                logger.warning("Visual '%s' exceeds canvas height (%d > %d); will be placed on next page during pagination", titles.get(m.visual_id, m.visual_id), m.y + m.h, CANVAS_H)
+            else:
+                issues.append(f"'{titles[m.visual_id]}' is outside the 1280x720 canvas.")
 
     for i, a in enumerate(placed):
         for b in placed[i + 1:]:

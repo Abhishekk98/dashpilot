@@ -843,9 +843,38 @@ def _is_sidebar_page(pg: PageInput) -> tuple[bool, int]:
     return False, 0
 
 
+def _needs_pagination(pg: PageInput) -> bool:
+    mapping_by_vid = {getattr(m, "visual_id", None): m for m in (pg.mapping or [])}
+    for v in pg.plan.visuals:
+        m = mapping_by_vid.get(v.id)
+        if m and getattr(m, "placed", False):
+            if m.y + m.h > CANVAS_H or m.x + m.w > CANVAS_W:
+                return True
+        elif v.box and (v.box.y + v.box.h > CANVAS_H or v.box.x + v.box.w > CANVAS_W):
+            return True
+    return False
+
+
 def _report_files(inp: BuildInputs, root: str) -> dict[str, bytes]:
     d = f"{root}/definition"
-    pages = inp.pages
+    from core.design_layouts import paginate_visuals  # noqa: PLC0415
+    expanded_pages: list[PageInput] = []
+    for pg in inp.pages:
+        if not _needs_pagination(pg):
+            expanded_pages.append(pg)
+            continue
+        slices = paginate_visuals(pg.plan.visuals, pg.mapping)
+        if len(slices) <= 1:
+            expanded_pages.append(pg)
+        else:
+            for s_idx, sl in enumerate(slices):
+                p_label = f"{pg.plan.pages[0]} Part {s_idx + 1}" if pg.plan.pages else f"Page {len(expanded_pages) + 1}"
+                p_plan = pg.plan.model_copy(update={
+                    "pages": [p_label],
+                    "visuals": sl.visuals,
+                })
+                expanded_pages.append(PageInput(plan=p_plan, boxes=pg.boxes, mapping=sl.mapping, background=pg.background))
+    pages = expanded_pages
     palette_muted = inp.theme.get("textClasses", {}).get("label", {}).get("color")
     tokens = _tokens(inp.theme, palette_muted)
     canvas = inp.theme.get("background", "#FFFFFF")
@@ -915,6 +944,17 @@ def _report_files(inp: BuildInputs, root: str) -> dict[str, bytes]:
             )),
             None,
         )
+        if title_box is None and n > 1 and pages[0].boxes:
+            used_p1 = {m.box_id for m in pages[0].mapping if m.placed and m.box_id}
+            title_box = next(
+                (b for b in pages[0].boxes if b.id not in used_p1 and (
+                    getattr(b, "role", None) == "title"
+                    or (b.id == "box_01" and (getattr(b, "role", None) == "title" or b.title == "Dashboard" or "dashboard" in (b.title or "").lower() or "report" in (b.title or "").lower()))
+                    or (b.y < 80 and b.h <= 70 and any(w in (b.title or "").lower() for w in ("dashboard", "overview", "report", "performance")))
+                )),
+                None,
+            )
+
         if title_box is not None:
             title_x = title_box.x
             title_y = max(MARGIN, title_box.y)
@@ -924,27 +964,20 @@ def _report_files(inp: BuildInputs, root: str) -> dict[str, bytes]:
             title_h = min(title_box.h, 60)
             font_family = title_box.title_font or "Segoe UI"
             font_color = title_box.title_color or tokens.get("text", "#FFFFFF")
-        else:
-            title_x = MARGIN
-            title_y = 14
-            title_w = 320
-            title_h = 46
-            font_family = "Segoe UI"
-            font_color = tokens.get("text", "#FFFFFF")
 
-        title_visual = report_title_textbox_json(
-            title=inp.plan.title,
-            subtitle=inp.plan.subtitle or "",
-            x=title_x,
-            y=title_y,
-            w=title_w,
-            h=title_h,
-            page=n,
-            tokens=tokens,
-            font_family=font_family,
-            font_color=font_color,
-        )
-        files[f"{d}/pages/{names[n - 1]}/visuals/{title_visual['name']}/visual.json"] = _json(title_visual)
+            title_visual = report_title_textbox_json(
+                title=inp.plan.title,
+                subtitle=inp.plan.subtitle or "",
+                x=title_x,
+                y=title_y,
+                w=title_w,
+                h=title_h,
+                page=n,
+                tokens=tokens,
+                font_family=font_family,
+                font_color=font_color,
+            )
+            files[f"{d}/pages/{names[n - 1]}/visuals/{title_visual['name']}/visual.json"] = _json(title_visual)
 
     for n in range(1, len(pages) + 1):
         curr_page_name = names[n - 1]

@@ -645,3 +645,191 @@ def test_shopsphere_import_and_pbip_build(shop):
                 assert not overlap(a, b), f"Overlap on page {n} between {a.visual_id} ({a.x},{a.y},{a.w},{a.h}) and {b.visual_id} ({b.x},{b.y},{b.w},{b.h})"
 
 
+def test_random_layouts_kam_zyada_chhote_slots(shop):
+    """Part 5: Random layouts (kam slots, zyada slots, chhote slots) pe saare planned visuals build mein aayein."""
+    import json
+    from core.design_import import DetectedBox, MappingItem, match, validate_mapping
+    from core.pbip_builder import build
+
+    plan = shop.plan
+    num_visuals = len(plan.visuals)
+
+    # 1. Kam slots: Only 2 slots for all visuals
+    few_boxes = [
+        DetectedBox(id="b_01", x=20, y=70, w=350, h=250, title="Slot 1"),
+        DetectedBox(id="b_02", x=400, y=70, w=350, h=250, title="Slot 2"),
+    ]
+    mapping_few, _ = match(plan, few_boxes)
+    assert len(mapping_few) == num_visuals
+    assert all(m.placed for m in mapping_few)
+    issues_few = validate_mapping(plan, mapping_few, few_boxes, autofix=True)
+    assert issues_few == []
+    test_few = shop.__class__(**{**shop.__dict__, "boxes": few_boxes, "mapping": mapping_few, "extra_pages": []})
+    files_few = build(test_few)
+    visuals_few = _visuals(files_few)
+    planned_in_build = [v for v in visuals_few if not _is_extra(v) and v["visual"]["visualType"] != "actionButton"]
+    assert len(planned_in_build) >= num_visuals
+
+    # 2. Zyada slots: 16 slots for fewer visuals
+    many_boxes = [
+        DetectedBox(id=f"b_{i:02d}", x=20 + (i % 4) * 290, y=70 + (i // 4) * 150, w=270, h=130, title=f"Slot {i}")
+        for i in range(16)
+    ]
+    mapping_many, _ = match(plan, many_boxes)
+    assert len(mapping_many) == num_visuals
+    assert all(m.placed for m in mapping_many)
+    issues_many = validate_mapping(plan, mapping_many, many_boxes, autofix=True)
+    assert issues_many == []
+    test_many = shop.__class__(**{**shop.__dict__, "boxes": many_boxes, "mapping": mapping_many, "extra_pages": []})
+    files_many = build(test_many)
+    visuals_many = _visuals(files_many)
+    planned_in_many = [v for v in visuals_many if not _is_extra(v) and v["visual"]["visualType"] != "actionButton"]
+    assert len(planned_in_many) >= num_visuals
+
+    # 3. Chhote slots: Slots too small for chart/table minimums (e.g., 100x40)
+    small_boxes = [
+        DetectedBox(id=f"small_{i:02d}", x=20 + i * 110, y=70, w=100, h=40, title=f"Small {i}")
+        for i in range(len(plan.visuals))
+    ]
+    mapping_small, _ = match(plan, small_boxes)
+    assert len(mapping_small) == num_visuals
+    assert all(m.placed for m in mapping_small)
+    issues_small = validate_mapping(plan, mapping_small, small_boxes, autofix=True)
+    assert issues_small == []
+    test_small = shop.__class__(**{**shop.__dict__, "boxes": small_boxes, "mapping": mapping_small, "extra_pages": []})
+    files_small = build(test_small)
+    visuals_small = _visuals(files_small)
+    planned_in_small = [v for v in visuals_small if not _is_extra(v) and v["visual"]["visualType"] != "actionButton"]
+    assert len(planned_in_small) >= num_visuals
+
+
+def test_zero_overlap_and_inside_canvas_on_all_pages(shop):
+    """Part 5: Kisi bhi page pe zero overlap ho, aur sab visuals canvas ke andar hon."""
+    import json
+    from core.design_import import DetectedBox, MappingItem, match, validate_mapping, overlap
+    from core.pbip_builder import build
+
+    plan = shop.plan
+    boxes = [
+        DetectedBox(id="b_title", x=16, y=16, w=280, h=44, title="Report Title", role="title"),
+        DetectedBox(id="b_nav", x=310, y=16, w=200, h=40, title="Nav", role="nav"),
+        DetectedBox(id="b_s1", x=530, y=16, w=230, h=36, title="Date Range", slot_type="slicer"),
+        DetectedBox(id="b_s2", x=780, y=16, w=230, h=36, title="Segment", slot_type="slicer"),
+        DetectedBox(id="b_s3", x=1030, y=16, w=230, h=36, title="Fulfillment Status", slot_type="slicer"),
+        DetectedBox(id="b_kpi1", x=16, y=72, w=236, h=100, title="Total Revenue", slot_type="kpi"),
+        DetectedBox(id="b_kpi2", x=268, y=72, w=236, h=100, title="Total Orders", slot_type="kpi"),
+        DetectedBox(id="b_kpi3", x=520, y=72, w=236, h=100, title="Average Order Value", slot_type="kpi"),
+        DetectedBox(id="b_kpi4", x=772, y=72, w=236, h=100, title="Return Rate", slot_type="kpi"),
+        DetectedBox(id="b_kpi5", x=1024, y=72, w=236, h=100, title="Units Sold", slot_type="kpi"),
+        DetectedBox(id="b_chart1", x=16, y=190, w=610, h=250, title="Total Revenue Trend", slot_type="chart"),
+        DetectedBox(id="b_chart2", x=642, y=190, w=610, h=250, title="Total Revenue by Fulfillment Status", slot_type="chart"),
+        DetectedBox(id="b_chart3", x=16, y=456, w=610, h=240, title="Total Revenue Share by Segment", slot_type="chart"),
+        DetectedBox(id="b_ins", x=642, y=456, w=610, h=240, title="Key Insights", slot_type="chart"),
+    ]
+    mapping, _ = match(plan, boxes)
+    validate_mapping(plan, mapping, boxes, autofix=True)
+
+    test_input = shop.__class__(**{**shop.__dict__, "boxes": boxes, "mapping": mapping, "extra_pages": []})
+    files = build(test_input)
+
+    page_names = sorted(list({p.split("/pages/")[1].split("/")[0] for p in files if "/pages/" in p and not p.endswith("pages.json")}))
+    assert len(page_names) >= 1
+
+    for p_name in page_names:
+        vis_files = [c for p, c in files.items() if f"/pages/{p_name}/visuals/" in p and p.endswith("visual.json")]
+        parsed_vis = [json.loads(c) for c in vis_files]
+        placed_rects = []
+        for v in parsed_vis:
+            pos = v["position"]
+            vx, vy, vw, vh = pos["x"], pos["y"], pos["width"], pos["height"]
+            assert vx >= 0 and vy >= 0, f"Visual {v['name']} at negative coords ({vx}, {vy})"
+            assert vx + vw <= 1280, f"Visual {v['name']} exceeds canvas width: {vx} + {vw} > 1280"
+            assert vy + vh <= 720, f"Visual {v['name']} exceeds canvas height: {vy} + {vh} > 720"
+            if not _is_extra(v):
+                placed_rects.append(MappingItem(visual_id=v["name"], x=vx, y=vy, w=vw, h=vh))
+
+        for i, a in enumerate(placed_rects):
+            for b in placed_rects[i + 1:]:
+                assert not overlap(a, b), f"Overlap on {p_name} between {a.visual_id} ({a.x},{a.y},{a.w},{a.h}) and {b.visual_id} ({b.x},{b.y},{b.w},{b.h})"
+
+
+def test_overflow_creates_page_2_with_navigation(shop):
+    """Part 5: Overflow hone pe page 2 bane, nav buttons ke saath."""
+    from core.design_import import MappingItem
+    from core.design_layouts import paginate_visuals
+    from core.pbip_builder import PageInput, build
+
+    plan = shop.plan
+    overflow_mapping = []
+    for i, v in enumerate(plan.visuals):
+        overflow_mapping.append(MappingItem(
+            visual_id=v.id, x=16, y=80 + i * 160, w=500, h=150, method="manual", pbi_title=True
+        ))
+
+    slices = paginate_visuals(plan.visuals, overflow_mapping)
+    assert len(slices) >= 2, f"Expected overflow to create at least 2 pages, got {len(slices)}"
+
+    pages_input = []
+    for s_idx, sl in enumerate(slices):
+        p_slice_plan = plan.model_copy(update={
+            "pages": [f"Part {s_idx + 1}"],
+            "visuals": sl.visuals,
+        })
+        pages_input.append(PageInput(plan=p_slice_plan, boxes=[], mapping=sl.mapping, background=shop.background))
+
+    test_input = shop.__class__(**{**shop.__dict__, "mapping": pages_input[0].mapping, "extra_pages": pages_input[1:]})
+    files = build(test_input)
+
+    assert any("dashpilot0page0000001/page.json" in p for p in files)
+    assert any("dashpilot0page0000002/page.json" in p for p in files)
+
+    visuals = _visuals(files)
+    nav_buttons = [v for v in visuals if v["visual"]["visualType"] == "actionButton"]
+    assert len(nav_buttons) >= 4, f"Expected at least 4 nav buttons across 2 pages, got {len(nav_buttons)}"
+
+
+def test_shopsphere_zip_build_ready_status(api, sample_bytes):
+    """Part 5: Shopsphere zip pe build ready=True ho."""
+    from core.planner import DashboardPlan, page_plan
+    from tests.test_insights import _project
+    from tests.test_option_a import stitch_export, _zip
+
+    pid = _project(api, sample_bytes)
+    res_plan = api.get(f"/api/projects/{pid}/plan")
+    assert res_plan.status_code == 200
+    whole_plan = res_plan.json()["plan"]
+    plan_obj = DashboardPlan.model_validate(whole_plan)
+
+    html_p1 = stitch_export(page_plan(plan_obj, 1), accent="#2563EB")
+    zip_bytes_p1 = _zip({"shopsphere/code.html": html_p1.encode("utf-8")})
+
+    res_upload = api.post(
+        f"/api/projects/{pid}/design/stitch",
+        files={"file": ("shopsphere.zip", zip_bytes_p1, "application/zip")},
+    )
+    assert res_upload.status_code == 200, res_upload.text
+
+    if len(plan_obj.pages) > 1:
+        html_p2 = stitch_export(page_plan(plan_obj, 2), accent="#2563EB")
+        zip_bytes_p2 = _zip({"shopsphere/p2/code.html": html_p2.encode("utf-8")})
+        res_upload_p2 = api.post(
+            f"/api/projects/{pid}/design/stitch?page=2",
+            files={"file": ("shopsphere_p2.zip", zip_bytes_p2, "application/zip")},
+        )
+        assert res_upload_p2.status_code == 200
+
+    res_select = api.post(f"/api/projects/{pid}/design/select", json={"id": "stitch"})
+    assert res_select.status_code == 200
+
+    res_status = api.get(f"/api/projects/{pid}/build")
+    assert res_status.status_code == 200
+    status = res_status.json()
+    assert status["ready"] is True, f"Build is blocked: {status.get('blockers')}"
+
+    res_build = api.post(f"/api/projects/{pid}/build", json={})
+    assert res_build.status_code == 200
+    build_result = res_build.json()
+    assert build_result["build"]["valid"] is True
+
+
+

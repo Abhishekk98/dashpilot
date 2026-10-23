@@ -152,13 +152,18 @@ def build_project(store: ProjectStore, project: Project, llm: LLMProvider | None
     if problems:
         raise BuildError("The data model has problems: " + "; ".join(problems[:3]))
     from core.design_layouts import paginate_visuals  # noqa: PLC0415
+    from core.pbip_builder import _needs_pagination  # noqa: PLC0415
     expanded_pages: list[PageInput] = []
     for n, imp in enumerate(imps, 1):
         p_plan = page_plan(plan, n)
         bg = (page_dir(store, project, n) / "background.png").read_bytes()
+        candidate = PageInput(plan=p_plan, boxes=imp.boxes, mapping=imp.mapping, background=bg)
+        if not _needs_pagination(candidate):
+            expanded_pages.append(candidate)
+            continue
         slices = paginate_visuals(p_plan.visuals, imp.mapping)
         if len(slices) <= 1:
-            expanded_pages.append(PageInput(plan=p_plan, boxes=imp.boxes, mapping=imp.mapping, background=bg))
+            expanded_pages.append(candidate)
         else:
             for s_idx, sl in enumerate(slices):
                 page_label = f"{p_plan.pages[0]} Part {s_idx + 1}" if p_plan.pages else f"Page {len(expanded_pages) + 1}"
