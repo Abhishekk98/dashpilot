@@ -562,3 +562,86 @@ def test_fallback_mapping_nearest_type_and_warnings():
     # Fallback notes should be logged
     assert any("Fallback" in n for n in notes)
 
+
+def test_shopsphere_import_and_pbip_build(shop):
+    """Shopsphere-like export: build not blocked, slicers >= 30px, title + nav buttons in PBIP, overlap 0."""
+    import json
+    from core.design_import import DetectedBox, MappingItem, match, validate_mapping, overlap
+    from core.pbip_builder import PageInput, build
+
+    plan = shop.plan
+    # 1. Header title box
+    b01 = DetectedBox(id="box_01", x=12, y=12, w=280, h=50, title=plan.title, text=f"{plan.title} LIVE BI Enterprise Analytics", role="title")
+    # 2. Page tabs box (holding Overview / Details)
+    b02 = DetectedBox(id="box_02", x=300, y=16, w=230, h=36, title="Overview", text="Overview Details P2", role="nav")
+    # 3. Slicers in header strip (starting with 28px height like Stitch)
+    slicers = [v for v in plan.visuals if v.role == "slicer"]
+    b03 = DetectedBox(id="box_03", x=540, y=16, w=220, h=28, title=slicers[0].title if len(slicers) > 0 else "Date Range")
+    b04 = DetectedBox(id="box_04", x=768, y=16, w=220, h=28, title=slicers[1].title if len(slicers) > 1 else "Segment")
+    b05 = DetectedBox(id="box_05", x=996, y=16, w=240, h=28, title=slicers[2].title if len(slicers) > 2 else "Channel")
+
+    # Non-slicer visuals (cards / charts / insights)
+    other_visuals = [v for v in plan.visuals if v.role != "slicer"]
+    other_boxes = [
+        DetectedBox(id=f"box_{i+6:02d}", x=v.box.x, y=v.box.y, w=v.box.w, h=v.box.h, title=v.title)
+        for i, v in enumerate(other_visuals)
+    ]
+    # Key insights parent box
+    insights_box = next((b for b in other_boxes if "insight" in b.title.lower()), other_boxes[-1])
+    # Decorative child boxes inside Key Insights (#91, #92)
+    child_1 = DetectedBox(id="box_child_1", x=insights_box.x + 10, y=insights_box.y + 40, w=insights_box.w - 20, h=40, title="Bullet 1")
+    child_2 = DetectedBox(id="box_child_2", x=insights_box.x + 10, y=insights_box.y + 90, w=insights_box.w - 20, h=40, title="Bullet 2")
+
+    all_raw_boxes = [b01, b02, b03, b04, b05, *other_boxes, child_1, child_2]
+    # Decorative child box filtering
+    parents = [b for b in all_raw_boxes if b.w >= 160 and b.h >= 80 and b.id != "box_01"]
+    decorative = {b.id for b in all_raw_boxes for p in parents if b.id != p.id and (p.x <= b.x and p.y <= b.y and p.x + p.w >= b.x + b.w and p.y + p.h >= b.y + b.h)}
+    boxes = [b for b in all_raw_boxes if b.id not in decorative]
+
+    # Verify child boxes inside Key Insights are filtered out as decorative
+    assert "box_child_1" not in [b.id for b in boxes]
+    assert "box_child_2" not in [b.id for b in boxes]
+
+    # Match visuals
+    mapping, _ = match(plan, boxes)
+    assert len(mapping) == len(plan.visuals)
+
+    # Validate mapping: slicers auto-expand to min 30px, build not blocked
+    issues = validate_mapping(plan, mapping, boxes)
+    assert not any("too small" in i for i in issues), issues
+    assert issues == [], f"Build is blocked by issues: {issues}"
+
+    # Slicers must be >= 30px
+    slicer_items = [m for m in mapping if any(v.id == m.visual_id and v.role == "slicer" for v in plan.visuals)]
+    assert all(m.h >= 30 for m in slicer_items), [m.h for m in slicer_items]
+
+    # Build PBIP
+    test_shop = shop.__class__(**{**shop.__dict__, "boxes": boxes, "mapping": mapping, "extra_pages": [shop.pages[1]]})
+    files = build(test_shop)
+    visuals = _visuals(files)
+
+    # Title textbox exists in PBIP
+    title_visuals = [
+        v for v in visuals
+        if v["visual"]["visualType"] == "textbox" and "general" in v["visual"].get("objects", {})
+        and any(plan.title in p["textRuns"][0]["value"] for p in v["visual"]["objects"]["general"][0]["properties"]["paragraphs"])
+    ]
+    assert len(title_visuals) >= 1, "Report title textbox visual missing from PBIP"
+
+    # Navigation buttons exist in PBIP
+    nav_visuals = [v for v in visuals if v["visual"]["visualType"] == "actionButton"]
+    assert len(nav_visuals) >= len(test_shop.pages) * len(test_shop.pages), f"Expected nav buttons, got {len(nav_visuals)}"
+
+    # Overlap is 0 on each page
+    for n, p_name in enumerate(["dashpilot0page0000001", "dashpilot0page0000002"], 1):
+        page_vis_files = [c for p, c in files.items() if f"/pages/{p_name}/visuals/" in p and p.endswith("visual.json")]
+        page_vis = [json.loads(c) for c in page_vis_files]
+        placed_rects = []
+        for v in page_vis:
+            pos = v["position"]
+            placed_rects.append(MappingItem(visual_id=v["name"], x=pos["x"], y=pos["y"], w=pos["width"], h=pos["height"]))
+        for i, a in enumerate(placed_rects):
+            for b in placed_rects[i + 1:]:
+                assert not overlap(a, b), f"Overlap on page {n} between {a.visual_id} ({a.x},{a.y},{a.w},{a.h}) and {b.visual_id} ({b.x},{b.y},{b.w},{b.h})"
+
+

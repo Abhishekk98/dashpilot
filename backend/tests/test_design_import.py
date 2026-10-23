@@ -146,7 +146,7 @@ def test_ai_fallback_maps_reworded_titles(shop):
     kpi = next(v for v in plan.visuals if v.role == "kpi")
     page = stitch_page(plan, rename={kpi.id: "Headline Q"})
     found = extract(page)
-    mapping, _ = match(plan, found.boxes)  # no AI: stays unplaced
+    mapping, _ = match(plan, found.boxes, fallback=False)  # no AI: stays unplaced
     assert not next(m for m in mapping if m.visual_id == kpi.id).placed
     box = next(b for b in found.boxes if b.title == "Headline Q")
     other = next(m for m in mapping if m.placed)
@@ -160,7 +160,7 @@ def test_ai_fallback_maps_reworded_titles(shop):
     assert validate_mapping(plan, mapping, found.boxes) == []
     assert "Headline Q" in llm.calls[0]["prompt"]
 
-    mapping, notes = match(plan, found.boxes, FakeProvider(errors=[LLMRateLimitError("quota")], max_retries=0))
+    mapping, notes = match(plan, found.boxes, FakeProvider(errors=[LLMRateLimitError("quota")], max_retries=0), fallback=False)
     assert not next(m for m in mapping if m.visual_id == kpi.id).placed and "map the remaining" in notes[0]
 
 

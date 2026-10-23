@@ -637,8 +637,8 @@ def _box_type_score(v, b: DetectedBox) -> float:
     return max(0.01, score)
 
 
-def match(plan: DashboardPlan, boxes: list[DetectedBox], llm: LLMProvider | None = None) -> tuple[list[MappingItem], list[str]]:
-    """Planned visual -> detected box (id, then title, then AI)."""
+def match(plan: DashboardPlan, boxes: list[DetectedBox], llm: LLMProvider | None = None, fallback: bool = True) -> tuple[list[MappingItem], list[str]]:
+    """Planned visual -> detected box (id, then title, then AI, then nearest-type fallback). All planned visuals are mapped."""
     notes: list[str] = []
     by_visual: dict[str, MappingItem] = {}
     used: set[str] = set()
@@ -681,6 +681,49 @@ def match(plan: DashboardPlan, boxes: list[DetectedBox], llm: LLMProvider | None
         except Exception as exc:  # matching still works without AI; the user maps the rest
             logger.warning("AI mapping skipped: %s", exc)
             notes.append("AI matching unavailable; map the remaining visuals by hand.")
+
+    if fallback:
+        # 4. Fallback mapping: pair remaining visuals with nearest/compatible free boxes
+        left = [v for v in plan.visuals if v.id not in by_visual]
+        free = [b for b in boxes if b.id not in used]
+        if left and free:
+            candidates = []
+            for v in left:
+                for b in free:
+                    s = _box_type_score(v, b)
+                    candidates.append((s, v, b))
+            candidates.sort(key=lambda item: -item[0])
+
+            for s, v, b in candidates:
+                if v.id in by_visual or b.id in used:
+                    continue
+                is_slicer = v.role == "slicer"
+                w = max(b.w, 40) if is_slicer else b.w
+                h = max(b.h, 30) if is_slicer else b.h
+                by_visual[v.id] = MappingItem(
+                    visual_id=v.id, box_id=b.id, x=b.x, y=b.y, w=w, h=h,
+                    method="fallback", score=round(s, 2), pbi_title=True,
+                )
+                used.add(b.id)
+                logger.warning("Fallback mapping: visual '%s' (%s) mapped to container '%s' (%dx%d)",
+                               v.title, v.type, b.title or b.id, w, h)
+                notes.append(f"Fallback: '{v.title}' ({v.type}) mapped to design container {b.id} ({w}x{h}px).")
+
+        # 5. Guaranteed fallback placement: if more visuals exist than boxes, assign default slots
+        still_left = [v for v in plan.visuals if v.id not in by_visual]
+        if still_left:
+            for idx, v in enumerate(still_left):
+                dw = 200 if v.role == "slicer" else 190 if v.role == "kpi" else 380
+                dh = 40 if v.role == "slicer" else 92 if v.role == "kpi" else 240
+                fx = 16 + (idx % 3) * (dw + 16)
+                fy = 72 + (idx // 3) * (dh + 16)
+                by_visual[v.id] = MappingItem(
+                    visual_id=v.id, box_id=None, x=fx, y=min(fy, CANVAS_H - dh - 16), w=dw, h=dh,
+                    method="fallback", score=0.1, pbi_title=True,
+                )
+                logger.warning("Fallback placement: visual '%s' (%s) placed at (%d, %d, %d, %d)",
+                               v.title, v.type, fx, fy, dw, dh)
+                notes.append(f"Fallback placement: '{v.title}' ({v.type}) placed on dashboard grid.")
 
     mapping = [by_visual.get(v.id) or MappingItem(visual_id=v.id) for v in plan.visuals]
     return mapping, notes
