@@ -832,4 +832,61 @@ def test_shopsphere_zip_build_ready_status(api, sample_bytes):
     assert build_result["build"]["valid"] is True
 
 
+def test_real_stitch_neo_brutalist_fixture_import_and_build(shop):
+    """Part 4: Test real fixture stitch_neo_brutalist_shop_analytics_dashboard.zip:
+    - 0 overlaps
+    - in-bounds coordinates [0, 1280] x [0, 720]
+    - 100% visual placement
+    """
+    import zipfile
+    import json
+    from pathlib import Path
+    from core.design_import import extract, match, validate_mapping, overlap, MappingItem
+    from core.pbip_builder import build
+
+    fixture_path = Path(__file__).parent / "fixtures" / "stitch_neo_brutalist_shop_analytics_dashboard.zip"
+    assert fixture_path.exists(), f"Fixture zip missing: {fixture_path}"
+
+    with zipfile.ZipFile(fixture_path) as z:
+        html = z.read("code.html").decode("utf-8")
+
+    found = extract(html, allow_scripts=True)
+    assert len(found.boxes) >= 8, f"Expected at least 8 boxes from real fixture, got {len(found.boxes)}"
+
+    plan = shop.plan
+    mapping, notes = match(plan, found.boxes)
+
+    # 100% visual placement
+    assert len(mapping) == len(plan.visuals), f"Expected {len(plan.visuals)} mapping items, got {len(mapping)}"
+    assert all(m.placed for m in mapping), "Not all visuals placed"
+
+    # In-bounds and zero overlap in mapping
+    issues = validate_mapping(plan, mapping, found.boxes, autofix=True)
+    assert issues == [], f"Validation issues: {issues}"
+
+    test_input = shop.__class__(**{**shop.__dict__, "boxes": found.boxes, "mapping": mapping, "extra_pages": []})
+    files = build(test_input)
+
+    page_names = sorted(list({p.split("/pages/")[1].split("/")[0] for p in files if "/pages/" in p and not p.endswith("pages.json")}))
+    assert len(page_names) >= 1
+
+    for p_name in page_names:
+        vis_files = [c for p, c in files.items() if f"/pages/{p_name}/visuals/" in p and p.endswith("visual.json")]
+        parsed_vis = [json.loads(c) for c in vis_files]
+        placed_rects = []
+        for v in parsed_vis:
+            pos = v["position"]
+            vx, vy, vw, vh = pos["x"], pos["y"], pos["width"], pos["height"]
+            assert vx >= 0 and vy >= 0, f"Visual {v['name']} negative coords ({vx}, {vy})"
+            assert vx + vw <= 1280, f"Visual {v['name']} exceeds canvas width: {vx}+{vw} > 1280"
+            assert vy + vh <= 720, f"Visual {v['name']} exceeds canvas height: {vy}+{vh} > 720"
+            if not _is_extra(v):
+                placed_rects.append(MappingItem(visual_id=v["name"], x=vx, y=vy, w=vw, h=vh))
+
+        for i, a in enumerate(placed_rects):
+            for b in placed_rects[i + 1:]:
+                assert not overlap(a, b), f"Overlap on {p_name} between {a.visual_id} ({a.x},{a.y},{a.w},{a.h}) and {b.visual_id} ({b.x},{b.y},{b.w},{b.h})"
+
+
+
 
