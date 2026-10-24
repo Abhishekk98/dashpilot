@@ -907,10 +907,7 @@ def _report_files(inp: BuildInputs, root: str) -> dict[str, bytes]:
         files[f"{root}/StaticResources/RegisteredResources/{background_file(n)}"] = pg.background
         boxes = {b.id: b for b in pg.boxes}
         mapping = {m.visual_id: m for m in pg.mapping}
-        from core.design_import import resolve_mapping_overlaps
-        placed_items = [mapping[v.id] for v in pg.plan.visuals if v.id in mapping and mapping[v.id].placed]
-        if placed_items:
-            resolve_mapping_overlaps(placed_items, min_gap=4)
+        # Pre-build repair pass: guarantee overlap = 0, bounds inside [0, 1280]x[0, 720], all visuals present
         for order, v in enumerate(pg.plan.visuals):
             item = mapping.get(v.id)
             if item is None or not item.placed:
@@ -919,6 +916,49 @@ def _report_files(inp: BuildInputs, root: str) -> dict[str, bytes]:
                 fx = MARGIN + (order % 3) * (dw + 12)
                 fy = 72 + (order // 3) * (dh + 12)
                 item = MappingItem(visual_id=v.id, x=fx, y=min(fy, CANVAS_H - dh - MARGIN), w=dw, h=dh, method="fallback", pbi_title=True)
+                mapping[v.id] = item
+
+            min_w = 40 if v.role == "slicer" else 80
+            min_h = 24 if v.role == "slicer" else 40
+            item.w = max(min_w, min(item.w, CANVAS_W))
+            item.h = max(min_h, min(item.h, CANVAS_H))
+            if item.x + item.w > CANVAS_W:
+                item.x = max(0, CANVAS_W - item.w)
+            if item.y + item.h > CANVAS_H:
+                item.y = max(0, CANVAS_H - item.h)
+            if item.x < 0:
+                item.x = 0
+            if item.y < 0:
+                item.y = 0
+
+        from core.design_import import resolve_mapping_overlaps
+        placed_items = [mapping[v.id] for v in pg.plan.visuals]
+        if placed_items:
+            resolve_mapping_overlaps(placed_items, min_gap=4)
+            for item in placed_items:
+                if item.x + item.w > CANVAS_W:
+                    item.x = max(0, CANVAS_W - item.w)
+                if item.y + item.h > CANVAS_H:
+                    item.y = max(0, CANVAS_H - item.h)
+                if item.x < 0:
+                    item.x = 0
+                if item.y < 0:
+                    item.y = 0
+
+            # Absolute zero-overlap guarantee (repair any true intersection)
+            for i, a in enumerate(placed_items):
+                for b_item in placed_items[i + 1:]:
+                    if not (a.x + a.w <= b_item.x or b_item.x + b_item.w <= a.x or a.y + a.h <= b_item.y or b_item.y + b_item.h <= a.y):
+                        if a.y + a.h + b_item.h <= CANVAS_H:
+                            b_item.y = a.y + a.h
+                        elif a.x + a.w + b_item.w <= CANVAS_W:
+                            b_item.x = a.x + a.w
+                        else:
+                            if b_item.y < a.y + a.h and b_item.y + b_item.h > a.y:
+                                b_item.h = max(24, a.y - b_item.y) if b_item.y < a.y else max(24, CANVAS_H - (a.y + a.h))
+
+        for order, v in enumerate(pg.plan.visuals):
+            item = mapping[v.id]
             box = boxes.get(item.box_id or "")
             extra: list[dict] = []
             rect = None

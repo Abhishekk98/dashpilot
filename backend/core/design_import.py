@@ -764,7 +764,20 @@ def is_slot_compatible(v, b: DetectedBox) -> bool:
     vtype = getattr(v, "type", "")
     bslot = getattr(b, "slot_type", None)
     if not bslot:
-        return True
+        if getattr(b, "role", None) == "title":
+            bslot = "title"
+        elif getattr(b, "role", None) == "nav":
+            bslot = "nav"
+        elif b.h <= 65 and b.w >= 40:
+            bslot = "slicer"
+        elif "insight" in (b.title or "").lower():
+            bslot = "insights"
+        elif (b.h <= 160 and b.w <= 440) or (b.w * b.h <= 50000 and b.h <= 180):
+            bslot = "kpi"
+        elif b.h >= 220 and (b.w >= 300 or b.w * b.h >= 70000):
+            bslot = "table"
+        else:
+            bslot = "chart"
     if vrole == "slicer":
         return bslot == "slicer"
     if vrole == "kpi":
@@ -785,6 +798,22 @@ def adapt_boxes_for_plan(plan: DashboardPlan, boxes: list[DetectedBox]) -> list[
     3. KPI row distribution: If KPI visuals exceed KPI slots, evenly distribute KPI row width.
     """
     boxes = list(boxes)
+    for b in boxes:
+        if not getattr(b, "slot_type", None):
+            if getattr(b, "role", None) == "title":
+                b.slot_type = "title"
+            elif getattr(b, "role", None) == "nav":
+                b.slot_type = "nav"
+            elif b.h <= 65 and b.w >= 40:
+                b.slot_type = "slicer"
+            elif "insight" in (b.title or "").lower():
+                b.slot_type = "insights"
+            elif (b.h <= 160 and b.w <= 440) or (b.w * b.h <= 50000 and b.h <= 180):
+                b.slot_type = "kpi"
+            elif b.h >= 220 and (b.w >= 300 or b.w * b.h >= 70000):
+                b.slot_type = "table"
+            else:
+                b.slot_type = "chart"
 
     def snap_8(v: float) -> int:
         return int(round(v / 8.0) * 8)
@@ -1134,6 +1163,15 @@ def _ai_prompt(visuals, boxes: list[DetectedBox]) -> str:
 
 
 # --- validation ------------------------------------------------------------------------------
+def overlap(a: MappingItem, b: MappingItem, min_gap: int = 0) -> bool:
+    """Return True if two items collide (overlap)."""
+    return not (
+        a.x + a.w + min_gap <= b.x or
+        b.x + b.w + min_gap <= a.x or
+        a.y + a.h + min_gap <= b.y or
+        b.y + b.h + min_gap <= a.y
+    )
+
 
 def resolve_mapping_overlaps(items: list[MappingItem], min_gap: int = 4) -> None:
     """Ensure no two visuals collide (gap >= min_gap).
