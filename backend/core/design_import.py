@@ -236,14 +236,24 @@ _DETECT = r"""
     return t && /[\p{L}\p{N}]/u.test(t) && !icon(el) ? t : '';
   };
   const rel = el => { const r = el.getBoundingClientRect(); return {x: r.left - o.left, y: r.top - o.top, w: r.width, h: r.height}; };
+  const isSlicerEl = el => {
+    const tag = el.tagName.toLowerCase();
+    if (tag === 'select' || tag === 'input') return true;
+    if (el.querySelector && el.querySelector('select, input')) return true;
+    const cls = typeof el.className === 'string' ? el.className : '';
+    return /slicer|filter|dropdown/i.test(cls);
+  };
   const cardLike = el => {
     if (el === canvas || el === document.body || el === document.documentElement) return false;
     const r = el.getBoundingClientRect();
-    if (r.width < 60 || r.height < 28) return false;
+    const slicer = isSlicerEl(el);
+    const minW = slicer ? 40 : 60;
+    const minH = slicer ? 18 : 28;
+    if (r.width < minW || r.height < minH) return false;
     if (r.width > W * 0.97 && r.height > H * 0.5) return false;
     const cs = getComputedStyle(el);
     const border = parseFloat(cs.borderTopWidth) > 0 && parseFloat(cs.borderLeftWidth) > 0 && alpha(cs.borderTopColor) > 0.04;
-    return alpha(cs.backgroundColor) > 0.04 || cs.backgroundImage !== 'none' || border || cs.boxShadow !== 'none';
+    return alpha(cs.backgroundColor) > 0.04 || cs.backgroundImage !== 'none' || border || cs.boxShadow !== 'none' || slicer;
   };
 
   let found = [];
@@ -462,14 +472,54 @@ def _detect(page, mark: bool) -> dict:
 
 def extract(html: str, allow_scripts: bool = False) -> Extraction:
     data = render_page(html, lambda page: _detect(page, False), allow_scripts)
+    raw_boxes = data.get("boxes", [])
+
+    # Proportional scaling: if any boxes exceed canvas bounds, proportionally scale them down
+    max_r = max((b["x"] + b["w"] for b in raw_boxes), default=CANVAS_W)
+    max_b = max((b["y"] + b["h"] for b in raw_boxes), default=CANVAS_H)
+    min_l = min((b["x"] for b in raw_boxes), default=0)
+    min_t = min((b["y"] for b in raw_boxes), default=0)
+    if min_l < 0:
+        for b in raw_boxes:
+            b["x"] -= min_l
+        max_r -= min_l
+    if min_t < 0:
+        for b in raw_boxes:
+            b["y"] -= min_t
+        max_b -= min_t
+
+    if max_r > CANVAS_W + 1 or max_b > CANVAS_H + 1:
+        s = min(CANVAS_W / max(max_r, 1), CANVAS_H / max(max_b, 1))
+        for b in raw_boxes:
+            b["x"] *= s
+            b["y"] *= s
+            b["w"] *= s
+            b["h"] *= s
+
+    def snap_8(val: float) -> int:
+        return int(round(val / 8.0) * 8)
+
     boxes, skipped = [], 0
-    for b in data["boxes"]:
-        x, y, w, h = (round(b[k]) for k in ("x", "y", "w", "h"))
-        if x < -1 or y < -1 or x + w > CANVAS_W + 1 or y + h > CANVAS_H + 1:
-            skipped += 1  # Stitch pages can be taller than the canvas; only the 1280x720 part counts
-            continue
+    for b in raw_boxes:
+        has_contract_id = bool(b.get("visual_id"))
+        if has_contract_id:
+            # Contract design: keep planned exact coordinates
+            x, y, w, h = (round(b[k]) for k in ("x", "y", "w", "h"))
+        else:
+            # Stitch export: snap proportionally to 8px grid
+            x = snap_8(b["x"])
+            y = snap_8(b["y"])
+            w = max(8, snap_8(b["w"]))
+            h = max(8, snap_8(b["h"]))
+
+        # Ensure within bounds
+        x = max(0, min(CANVAS_W - 8, x))
+        y = max(0, min(CANVAS_H - 8, y))
+        w = min(w, CANVAS_W - x)
+        h = min(h, CANVAS_H - y)
+
         boxes.append(DetectedBox(
-            id=b["id"], x=max(0, x), y=max(0, y), w=min(w, CANVAS_W - max(0, x)), h=min(h, CANVAS_H - max(0, y)),
+            id=b["id"], x=x, y=y, w=w, h=h,
             title=" ".join((b["title"] or "").split())[:120], text=b["text"], visual_id=b["visual_id"], type=b["type"],
             background=css_hex(b["background"]), border=css_hex(b["border"]), radius=round(b["radius"]),
             title_font=_first_family(b["title_font"]), title_color=css_hex(b["title_color"]),
@@ -478,16 +528,29 @@ def extract(html: str, allow_scripts: bool = False) -> Extraction:
             label=" ".join((b.get("label") or "").split())[:80],
         ))
 
-    # Filter out decorative child boxes fully contained inside a parent card (e.g. #14-#17 inside Key Insights)
-    is_header = lambda b: b.y < 50 and b.w > CANVAS_W * 0.75
-    parents = [b for b in boxes if not is_header(b) and b.w >= 160 and b.h >= 80]
-    decorative_ids = {
-        b.id for b in boxes
-        for p in parents
-        if b.id != p.id and (p.x <= b.x and p.y <= b.y and p.x + p.w >= b.x + b.w and p.y + p.h >= b.y + b.h)
-    }
-    if decorative_ids:
-        boxes = [b for b in boxes if b.id not in decorative_ids]
+    # Child containment: Jo box doosre ke andar ho (child) use parent ka hissa maano, alag slot nahi.
+    # Exclude header container containing nav or slicers from swallowing nav/slicers.
+    is_header = lambda b: b.y < 80 and b.w > CANVAS_W * 0.7
+    parents = [b for b in boxes if not is_header(b) and b.w >= 100 and b.h >= 60]
+    child_ids = set()
+    for b in boxes:
+        for p in parents:
+            if b.id == p.id:
+                continue
+            ix1, iy1 = max(b.x, p.x), max(b.y, p.y)
+            ix2, iy2 = min(b.x + b.w, p.x + p.w), min(b.y + b.h, p.y + p.h)
+            inter_area = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+            b_area = b.w * b.h
+            p_area = p.w * p.h
+            if b_area < p_area and b_area > 0 and (inter_area / b_area >= 0.85 or (p.x <= b.x and p.y <= b.y and p.x + p.w >= b.x + b.w and p.y + p.h >= b.y + b.h)):
+                child_ids.add(b.id)
+                if not p.title and b.title:
+                    p.title = b.title
+                if not p.value and b.value:
+                    p.value = b.value
+                break
+    if child_ids:
+        boxes = [b for b in boxes if b.id not in child_ids]
 
     for b in boxes:
         text_lower = (b.text or "").lower()
@@ -496,13 +559,13 @@ def extract(html: str, allow_scripts: bool = False) -> Extraction:
         if (b.y < 80 and b.h <= 60 and ("overview" in text_lower or "detail" in text_lower or "page" in text_lower or b.id == "box_02") and b.w <= 400):
             b.role = "nav"
             b.slot_type = "nav"
-        elif (b.y < 80 and (b.w >= 200 or b.id == "box_01") and any(k in title_lower or k in text_lower for k in ("dashboard", "analytics", "performance", "live bi"))):
+        elif (b.y < 80 and (b.w >= 200 or b.id == "box_01") and any(k in title_lower or k in text_lower for k in ("dashboard", "analytics", "performance", "live bi")) and b.h >= 50):
             b.role = "title"
             b.slot_type = "title"
-        elif b.y < 70 and b.w >= 250 and b.h <= 65:
+        elif b.y < 70 and b.w >= 250 and b.h <= 65 and any(k in title_lower or k in text_lower for k in ("dashboard", "analytics", "performance")):
             b.role = "title"
             b.slot_type = "title"
-        elif b.h <= 65 and b.w >= 80:
+        elif b.h <= 65 and b.w >= 40:
             b.slot_type = "slicer"
         elif (b.h <= 160 and b.w <= 440) or (area <= 50000 and b.h <= 180):
             b.slot_type = "kpi"
@@ -848,7 +911,7 @@ def match(plan: DashboardPlan, boxes: list[DetectedBox], llm: LLMProvider | None
 
     placed_items = [m for m in by_visual.values() if m.placed]
     if placed_items:
-        resolve_mapping_overlaps(placed_items, min_gap=8)
+        resolve_mapping_overlaps(placed_items, min_gap=4)
 
     mapping = [by_visual.get(v.id) or MappingItem(visual_id=v.id) for v in plan.visuals]
     return mapping, notes
@@ -864,7 +927,7 @@ def _ai_prompt(visuals, boxes: list[DetectedBox]) -> str:
 
 # --- validation ------------------------------------------------------------------------------
 
-def resolve_mapping_overlaps(items: list[MappingItem], min_gap: int = 8) -> None:
+def resolve_mapping_overlaps(items: list[MappingItem], min_gap: int = 4) -> None:
     """Ensure no two visuals collide (gap >= min_gap).
     Does NOT modify items if no collision exists, and preserves original positions."""
     placed = [m for m in items if m.placed]
@@ -970,7 +1033,7 @@ def autofix_mapping(plan: DashboardPlan, mapping: list[MappingItem], boxes: list
         if m.y + m.h > CANVAS_H - 16:
             m.y = max(16, CANVAS_H - 16 - m.h)
 
-    resolve_mapping_overlaps(placed, min_gap=8)
+    resolve_mapping_overlaps(placed, min_gap=4)
 
     mapping.clear()
     for v in plan.visuals:
@@ -1028,7 +1091,7 @@ def validate_mapping(plan: DashboardPlan, mapping: list[MappingItem], boxes: lis
                 slicer_expanded = True
 
     if slicer_expanded:
-        resolve_mapping_overlaps(placed, min_gap=8)
+        resolve_mapping_overlaps(placed, min_gap=4)
 
     for m in placed:
         v = visuals.get(m.visual_id)

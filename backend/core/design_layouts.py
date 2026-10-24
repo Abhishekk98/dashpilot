@@ -680,7 +680,7 @@ def paginate_visuals(
     mapping: list | None = None,
     canvas_w: int = CANVAS_W,
     canvas_h: int = CANVAS_H,
-    min_gap: int = MIN_GAP,
+    min_gap: int | None = None,
     margin: int = M,
     top_offset: int = TOP,
 ) -> list[PageSlice]:
@@ -689,6 +689,7 @@ def paginate_visuals(
     if not visuals:
         return [PageSlice(page_num=1, visuals=[], mapping=[])]
 
+    actual_min_gap = min_gap if min_gap is not None else (4 if mapping else MIN_GAP)
     mapping_by_vid = {getattr(m, "visual_id", None): m for m in (mapping or [])}
 
     for v in visuals:
@@ -705,13 +706,13 @@ def paginate_visuals(
         ax, ay, aw, ah = a.box.x, a.box.y, a.box.w, a.box.h
         for b in visuals[i + 1:]:
             bx, by, bw, bh = b.box.x, b.box.y, b.box.w, b.box.h
-            if rects_intersect((ax, ay, aw, ah), (bx, by, bw, bh), min_gap=min_gap):
+            if rects_intersect((ax, ay, aw, ah), (bx, by, bw, bh), min_gap=actual_min_gap):
                 has_collision = True
                 break
         if has_collision:
             break
     if has_collision:
-        resolve_overlaps(visuals, canvas_w=canvas_w, canvas_h=canvas_h, min_gap=min_gap, margin=margin, top_offset=top_offset)
+        resolve_overlaps(visuals, canvas_w=canvas_w, canvas_h=canvas_h, min_gap=actual_min_gap, margin=margin, top_offset=top_offset)
 
     pages: list[PageSlice] = []
     max_usable_h = canvas_h
@@ -723,8 +724,8 @@ def paginate_visuals(
         overflow: list[PlanVisual] = []
 
         if current_page_num > 1:
-            adapt_grid_layout(remaining, canvas_w=canvas_w, canvas_h=canvas_h, min_gap=min_gap, margin=margin, top_offset=top_offset)
-            resolve_overlaps(remaining, canvas_w=canvas_w, canvas_h=canvas_h, min_gap=min_gap, margin=margin, top_offset=top_offset)
+            adapt_grid_layout(remaining, canvas_w=canvas_w, canvas_h=canvas_h, min_gap=actual_min_gap, margin=margin, top_offset=top_offset)
+            resolve_overlaps(remaining, canvas_w=canvas_w, canvas_h=canvas_h, min_gap=actual_min_gap, margin=margin, top_offset=top_offset)
 
         for v in remaining:
             b = v.box

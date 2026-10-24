@@ -910,7 +910,7 @@ def _report_files(inp: BuildInputs, root: str) -> dict[str, bytes]:
         from core.design_import import resolve_mapping_overlaps
         placed_items = [mapping[v.id] for v in pg.plan.visuals if v.id in mapping and mapping[v.id].placed]
         if placed_items:
-            resolve_mapping_overlaps(placed_items, min_gap=8)
+            resolve_mapping_overlaps(placed_items, min_gap=4)
         for order, v in enumerate(pg.plan.visuals):
             item = mapping.get(v.id)
             if item is None or not item.placed:
