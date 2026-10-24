@@ -657,7 +657,7 @@ def adapt_grid_layout(
     if tiles:
         cols = 3 if len(tiles) >= 5 else 2 if len(tiles) >= 2 else 1
         tile_w = (inner_w - (cols - 1) * min_gap) // cols
-        tile_h = 240
+        tile_h = 168 if len(tiles) >= 4 else 220
         for i, t in enumerate(tiles):
             r = i // cols
             c = i % cols
@@ -724,8 +724,9 @@ def paginate_visuals(
         overflow: list[PlanVisual] = []
 
         if current_page_num > 1:
-            adapt_grid_layout(remaining, canvas_w=canvas_w, canvas_h=canvas_h, min_gap=actual_min_gap, margin=margin, top_offset=top_offset)
-            resolve_overlaps(remaining, canvas_w=canvas_w, canvas_h=canvas_h, min_gap=actual_min_gap, margin=margin, top_offset=top_offset)
+            page_top = max(top_offset, 96)
+            remaining = adapt_grid_layout(remaining, canvas_w=canvas_w, canvas_h=canvas_h, min_gap=actual_min_gap, margin=margin, top_offset=page_top)
+            resolve_overlaps(remaining, canvas_w=canvas_w, canvas_h=canvas_h, min_gap=actual_min_gap, margin=margin, top_offset=page_top)
 
         for v in remaining:
             b = v.box
@@ -737,12 +738,16 @@ def paginate_visuals(
                 overflow.append(v)
 
         if not current_page_visuals and overflow:
-            first = overflow.pop(0)
-            first_copy = first.model_copy(deep=True)
-            first_copy.page = current_page_num
-            first_copy.box.y = top_offset
-            first_copy.box.h = min(first_copy.box.h, max_usable_h - top_offset)
-            current_page_visuals.append(first_copy)
+            page_top = max(top_offset, 96)
+            curr_y = page_top
+            while overflow and curr_y + 120 <= max_usable_h:
+                next_v = overflow.pop(0)
+                next_copy = next_v.model_copy(deep=True)
+                next_copy.page = current_page_num
+                next_copy.box.y = curr_y
+                next_copy.box.h = min(next_copy.box.h, max_usable_h - curr_y)
+                current_page_visuals.append(next_copy)
+                curr_y += next_copy.box.h + actual_min_gap
 
         slice_mapping = []
         for pv in current_page_visuals:

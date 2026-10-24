@@ -488,6 +488,7 @@ def extract(html: str, allow_scripts: bool = False) -> Extraction:
             b["y"] -= min_t
         max_b -= min_t
 
+    scaled = False
     if max_r > CANVAS_W + 1 or max_b > CANVAS_H + 1:
         s = min(CANVAS_W / max(max_r, 1), CANVAS_H / max(max_b, 1))
         for b in raw_boxes:
@@ -495,6 +496,7 @@ def extract(html: str, allow_scripts: bool = False) -> Extraction:
             b["y"] *= s
             b["w"] *= s
             b["h"] *= s
+        scaled = True
 
     def snap_8(val: float) -> int:
         return int(round(val / 8.0) * 8)
@@ -502,11 +504,11 @@ def extract(html: str, allow_scripts: bool = False) -> Extraction:
     boxes, skipped = [], 0
     for b in raw_boxes:
         has_contract_id = bool(b.get("visual_id"))
-        if has_contract_id:
-            # Contract design: keep planned exact coordinates
+        if has_contract_id or not scaled:
+            # Contract design or unscaled canvas: keep planned exact coordinates
             x, y, w, h = (round(b[k]) for k in ("x", "y", "w", "h"))
         else:
-            # Stitch export: snap proportionally to 8px grid
+            # Stitch export scaled into 1280x720: snap proportionally to 8px grid
             x = snap_8(b["x"])
             y = snap_8(b["y"])
             w = max(8, snap_8(b["w"]))
@@ -556,7 +558,7 @@ def extract(html: str, allow_scripts: bool = False) -> Extraction:
         text_lower = (b.text or "").lower()
         title_lower = (b.title or "").lower()
         area = b.w * b.h
-        if (b.y < 80 and b.h <= 60 and ("overview" in text_lower or "detail" in text_lower or "page" in text_lower or b.id == "box_02") and b.w <= 400):
+        if (b.y < 80 and b.h <= 60 and ("overview" in text_lower or "detail" in text_lower or "page" in text_lower) and b.w <= 400):
             b.role = "nav"
             b.slot_type = "nav"
         elif (b.y < 80 and (b.w >= 200 or b.id == "box_01") and any(k in title_lower or k in text_lower for k in ("dashboard", "analytics", "performance", "live bi")) and b.h >= 50):
@@ -567,6 +569,8 @@ def extract(html: str, allow_scripts: bool = False) -> Extraction:
             b.slot_type = "title"
         elif b.h <= 65 and b.w >= 40:
             b.slot_type = "slicer"
+        elif "insight" in title_lower:
+            b.slot_type = "insights"
         elif (b.h <= 160 and b.w <= 440) or (area <= 50000 and b.h <= 180):
             b.slot_type = "kpi"
         elif b.h >= 220 and (b.w >= 300 or area >= 70000 or (b.h / max(1, b.w) >= 0.7 and area >= 50000)):
@@ -641,10 +645,11 @@ def title_score(title: str, box: DetectedBox) -> float:
     ta, tb = set(a.split()), set(b.split())
     tokens = len(ta & tb) / max(len(ta), len(tb)) if tb else 0.0
     inside = 0.9 if f" {a} " in f" {_norm(box.text)} " else 0.0  # exact title somewhere in the card
+    sub = 0.88 if (a and b and (a in b or b in a)) else 0.0
     # The exact title right above a small card ("Slicer: Date Range" over a dropdown) beats a big
     # card that merely mentions it somewhere (the header that holds all the filters).
     above = 0.95 if box.label and f" {a} " in f" {_norm(box.label)} " else 0.0
-    return round(max(ratio, tokens * 0.95, inside, above), 3)
+    return round(max(ratio, tokens * 0.95, inside, sub, above), 3)
 
 
 class _AIPair(BaseModel):
@@ -658,11 +663,11 @@ class _AIPairs(BaseModel):
 
 VISUAL_MIN_SIZES = {
     "slicer": (140, 32),
-    "kpi": (180, 90),
-    "table": (300, 220),
-    "matrix": (300, 220),
-    "chart": (300, 200),
-    "insights": (280, 180),
+    "kpi": (120, 80),
+    "table": (280, 180),
+    "matrix": (280, 180),
+    "chart": (260, 150),
+    "insights": (260, 70),
 }
 
 
@@ -682,19 +687,19 @@ def visual_min_size(v) -> tuple[int, int]:
 
 def _item(visual_id: str, box: DetectedBox, method: str, score: float, is_slicer: bool = False, v=None) -> MappingItem:
     role = getattr(v, "role", "slicer" if is_slicer else "chart") if v else ("slicer" if is_slicer else "chart")
-    mw, mh = visual_min_size(v) if v else ((140, 32) if role == "slicer" else (180, 90))
+    mw, mh = visual_min_size(v) if v else ((140, 32) if role == "slicer" else (120, 80))
     v_box = getattr(v, "box", None)
     is_bigger = (v_box is not None and (box.w > v_box.w + 8 or box.h > v_box.h + 8)) or (method == "fallback" and box.w >= mw + 16 and box.h >= mh + 16)
     if is_bigger and not box.visual_id:
         x = box.x + 8
         y = box.y + 8
-        w = max(box.w - 16, 40 if role == "slicer" else mw)
-        h = max(box.h - 16, 30 if role == "slicer" else mh)
+        w = min(box.w - 16, max(40 if role == "slicer" else mw, box.w - 16))
+        h = min(box.h - 16, max(30 if role == "slicer" else mh, box.h - 16))
     else:
         x = box.x
         y = box.y
-        w = max(box.w, 40) if role == "slicer" else box.w
-        h = max(box.h, 30) if role == "slicer" else box.h
+        w = box.w
+        h = box.h
     return MappingItem(visual_id=visual_id, box_id=box.id, x=x, y=y, w=w, h=h, method=method, score=score)
 
 
@@ -752,8 +757,205 @@ def _box_type_score(v, b: DetectedBox) -> float:
     return max(0.01, score)
 
 
+def is_slot_compatible(v, b: DetectedBox) -> bool:
+    if b.visual_id and b.visual_id == getattr(v, "id", None):
+        return True
+    vrole = getattr(v, "role", "chart")
+    vtype = getattr(v, "type", "")
+    bslot = getattr(b, "slot_type", None)
+    if not bslot:
+        return True
+    if vrole == "slicer":
+        return bslot == "slicer"
+    if vrole == "kpi":
+        return bslot == "kpi"
+    if vrole in ("chart", "table") or vtype in ("table", "matrix"):
+        return bslot in ("chart", "table")
+    if vrole == "insights":
+        return bslot in ("insights", "chart", "table")
+    return True
+
+
+def adapt_boxes_for_plan(plan: DashboardPlan, boxes: list[DetectedBox]) -> list[DetectedBox]:
+    """Adapt detected template/Stitch boxes to fit the plan before matching:
+    1. Slicers: Slicers never go in KPI/chart boxes. If no slicer slot, place in header (box_01)
+       empty space or a thin slicer strip below title, shifting lower boxes down.
+    2. Large chart splitting: If chart slots are insufficient, split large chart box (box_08)
+       into two stacked charts on 8px grid before creating any extra page.
+    3. KPI row distribution: If KPI visuals exceed KPI slots, evenly distribute KPI row width.
+    """
+    boxes = list(boxes)
+
+    def snap_8(v: float) -> int:
+        return int(round(v / 8.0) * 8)
+
+    # 1. Slicers: allocate in header or slicer strip (never in KPI/chart boxes)
+    plan_slicers = [v for v in plan.visuals if v.role == "slicer"]
+    existing_slicers = [b for b in boxes if getattr(b, "slot_type", None) == "slicer"]
+    if len(existing_slicers) < len(plan_slicers):
+        needed = len(plan_slicers) - len(existing_slicers)
+        header_box = next((b for b in boxes if getattr(b, "role", None) == "title" or getattr(b, "slot_type", None) == "title"), None)
+        if not header_box:
+            header_box = next((b for b in boxes if b.y < 80 and b.w >= 300), None)
+
+        if header_box and header_box.h >= 64:
+            # Place in bottom row of header
+            start_x = snap_8(header_box.x + 32) if header_box.w > 400 else header_box.x
+            end_x = snap_8(header_box.x + header_box.w - 16)
+            total_w = max(200, end_x - start_x)
+            gap = 8
+            sw = snap_8((total_w - (needed - 1) * gap) / needed)
+            sh = 32
+            sy = snap_8(header_box.y + header_box.h - sh - 8)
+            for i in range(needed):
+                idx = len(existing_slicers) + i
+                title = plan_slicers[idx].title if idx < len(plan_slicers) else f"Slicer {i+1}"
+                s_box = DetectedBox(
+                    id=f"slicer_hdr_{idx+1}",
+                    x=start_x + i * (sw + gap),
+                    y=sy,
+                    w=sw,
+                    h=sh,
+                    role=None,
+                    slot_type="slicer",
+                    title=title,
+                    background=header_box.background,
+                    radius=header_box.radius,
+                )
+                boxes.append(s_box)
+        else:
+            # Thin slicer strip below title, shift lower boxes
+            strip_y = snap_8(header_box.y + header_box.h + 8) if header_box else 16
+            sh = 32
+            shift_amount = 40  # 32 + 8
+            for b in boxes:
+                if b.y >= strip_y:
+                    b.y += shift_amount
+            # Ensure within canvas bounds
+            max_b = max((b.y + b.h for b in boxes), default=720)
+            if max_b > CANVAS_H:
+                overflow = max_b - CANVAS_H
+                charts = [b for b in boxes if getattr(b, "slot_type", None) in ("chart", "table") and b.h >= 160]
+                if charts:
+                    per_chart = snap_8(overflow / len(charts))
+                    for b in charts:
+                        b.h = max(120, b.h - per_chart)
+            avail_w = CANVAS_W - 32
+            gap = 8
+            sw = snap_8((avail_w - (needed - 1) * gap) / needed)
+            for i in range(needed):
+                idx = len(existing_slicers) + i
+                title = plan_slicers[idx].title if idx < len(plan_slicers) else f"Slicer {i+1}"
+                s_box = DetectedBox(
+                    id=f"slicer_strip_{idx+1}",
+                    x=16 + i * (sw + gap),
+                    y=strip_y,
+                    w=sw,
+                    h=sh,
+                    role=None,
+                    slot_type="slicer",
+                    title=title,
+                )
+                boxes.append(s_box)
+
+    # 2. Large chart box splitting (e.g. box_08): split before creating page 2
+    has_insights_slot = any(getattr(b, "slot_type", None) == "insights" for b in boxes)
+    charts_needed = [v for v in plan.visuals if v.role in ("chart", "table") or (v.role == "insights" and not has_insights_slot)]
+    available_chart_slots = [b for b in boxes if getattr(b, "slot_type", None) in ("chart", "table") and getattr(b, "role", None) not in ("title", "nav")]
+    shortage = len(charts_needed) - len(available_chart_slots)
+    splittable = [b for b in boxes if getattr(b, "slot_type", None) in ("chart", "table") and (b.h >= 260 or (b.w >= 800 and b.h >= 180))]
+    splittable.sort(key=lambda b: -(b.w * b.h))
+
+    for target in splittable:
+        if shortage <= 0:
+            break
+        if target.h >= 260:
+            gap = 8
+            h1 = snap_8((target.h - gap) / 2)
+            h2 = target.h - gap - h1
+            b1 = target.model_copy(update={"id": f"{target.id}_a", "h": h1, "slot_type": "chart"})
+            b2 = target.model_copy(update={"id": f"{target.id}_b", "y": target.y + h1 + gap, "h": h2, "slot_type": "chart", "title": ""})
+            boxes.remove(target)
+            boxes.extend([b1, b2])
+            shortage -= 1
+        elif target.w >= 800 and target.h >= 180:
+            gap = 8
+            w1 = snap_8((target.w - gap) / 2)
+            w2 = target.w - gap - w1
+            b1 = target.model_copy(update={"id": f"{target.id}_a", "w": w1, "slot_type": "chart"})
+            b2 = target.model_copy(update={"id": f"{target.id}_b", "x": target.x + w1 + gap, "w": w2, "slot_type": "chart", "title": ""})
+            boxes.remove(target)
+            boxes.extend([b1, b2])
+            shortage -= 1
+
+    # 3. KPI row distribution
+    kpi_visuals = [v for v in plan.visuals if v.role == "kpi"]
+    kpi_boxes = [b for b in boxes if getattr(b, "slot_type", None) == "kpi"]
+    if len(kpi_visuals) > len(kpi_boxes) and kpi_boxes:
+        min_x = min(b.x for b in kpi_boxes)
+        max_r = max(b.x + b.w for b in kpi_boxes)
+        row_y = kpi_boxes[0].y
+        row_h = kpi_boxes[0].h
+        row_w = max_r - min_x
+        K = len(kpi_visuals)
+        gap = 8
+        kw = snap_8((row_w - (K - 1) * gap) / K)
+        new_kpis = []
+        for i in range(K):
+            new_kpis.append(kpi_boxes[0].model_copy(update={
+                "id": f"kpi_slot_{i+1}",
+                "x": min_x + i * (kw + gap),
+                "y": row_y,
+                "w": kw,
+                "h": row_h,
+                "slot_type": "kpi",
+                "title": kpi_visuals[i].title,
+            }))
+        for b in kpi_boxes:
+            if b in boxes:
+                boxes.remove(b)
+        boxes.extend(new_kpis)
+
+    return boxes
+
+
+def expand_vacant_boxes(mapping: dict[str, MappingItem], boxes: list[DetectedBox], used_ids: set[str]) -> None:
+    """If visuals are fewer than template slots, expand adjacent used boxes to eliminate gaps."""
+    boxes_by_id = {b.id: b for b in boxes}
+    free_boxes = [b for b in boxes if b.id not in used_ids and getattr(b, "role", None) not in ("title", "nav")]
+    placed_items = {m.box_id: m for m in mapping.values() if m.placed and m.box_id}
+
+    for fb in free_boxes:
+        above_id = next((bid for bid in placed_items if bid in boxes_by_id and abs(boxes_by_id[bid].x - fb.x) <= 8 and abs(boxes_by_id[bid].w - fb.w) <= 8 and 0 <= fb.y - (boxes_by_id[bid].y + boxes_by_id[bid].h) <= 16), None)
+        if above_id:
+            gap = fb.y - (boxes_by_id[above_id].y + boxes_by_id[above_id].h)
+            placed_items[above_id].h += fb.h + gap
+            boxes_by_id[above_id].h += fb.h + gap
+            used_ids.add(fb.id)
+            continue
+        below_id = next((bid for bid in placed_items if bid in boxes_by_id and abs(boxes_by_id[bid].x - fb.x) <= 8 and abs(boxes_by_id[bid].w - fb.w) <= 8 and 0 <= boxes_by_id[bid].y - (fb.y + fb.h) <= 16), None)
+        if below_id:
+            gap = boxes_by_id[below_id].y - (fb.y + fb.h)
+            placed_items[below_id].y = fb.y
+            placed_items[below_id].h += fb.h + gap
+            boxes_by_id[below_id].y = fb.y
+            boxes_by_id[below_id].h += fb.h + gap
+            used_ids.add(fb.id)
+            continue
+        left_id = next((bid for bid in placed_items if bid in boxes_by_id and abs(boxes_by_id[bid].y - fb.y) <= 8 and abs(boxes_by_id[bid].h - fb.h) <= 8 and 0 <= fb.x - (boxes_by_id[bid].x + boxes_by_id[bid].w) <= 16), None)
+        if left_id:
+            gap = fb.x - (boxes_by_id[left_id].x + boxes_by_id[left_id].w)
+            placed_items[left_id].w += fb.w + gap
+            boxes_by_id[left_id].w += fb.w + gap
+            used_ids.add(fb.id)
+            continue
+
+
 def match(plan: DashboardPlan, boxes: list[DetectedBox], llm: LLMProvider | None = None, fallback: bool = True) -> tuple[list[MappingItem], list[str]]:
     """Planned visual -> detected box (id, then title, then AI, then nearest-type fallback). All planned visuals are mapped."""
+    is_contract = any(bool(b.visual_id) for b in boxes)
+    if not is_contract:
+        boxes = adapt_boxes_for_plan(plan, boxes)
     notes: list[str] = []
     by_visual: dict[str, MappingItem] = {}
     used: set[str] = set()
@@ -762,12 +964,13 @@ def match(plan: DashboardPlan, boxes: list[DetectedBox], llm: LLMProvider | None
     for b in boxes:  # 1. contract ids (Options B/C)
         if b.visual_id in planned and b.visual_id not in by_visual and b.id not in used:
             v = planned[b.visual_id]
-            is_slicer = v.role == "slicer"
-            by_visual[b.visual_id] = _item(b.visual_id, b, "id", 1.0, is_slicer=is_slicer, v=v)
-            used.add(b.id)
+            if is_slot_compatible(v, b):
+                is_slicer = v.role == "slicer"
+                by_visual[b.visual_id] = _item(b.visual_id, b, "id", 1.0, is_slicer=is_slicer, v=v)
+                used.add(b.id)
 
-    pairs = sorted(  # 2. titles (Stitch): best pairs first, each side used once
-        ((title_score(v.title, b), v.id, b) for v in plan.visuals if v.id not in by_visual for b in boxes if b.id not in used),
+    pairs = sorted(  # 2. titles (Stitch): best pairs first, each side used once, strictly compatible slots
+        ((title_score(v.title, b), v.id, b) for v in plan.visuals if v.id not in by_visual for b in boxes if b.id not in used and is_slot_compatible(v, b)),
         key=lambda t: -t[0],
     )
     for score, vid, b in pairs:
@@ -793,13 +996,14 @@ def match(plan: DashboardPlan, boxes: list[DetectedBox], llm: LLMProvider | None
             for p in answer.pairs:
                 if p.visual_id in planned and p.visual_id not in by_visual and p.box_id in free_ids and p.box_id not in used:
                     v = planned[p.visual_id]
-                    mw, mh = visual_min_size(v)
                     box = free_ids[p.box_id]
-                    if box.w >= mw * 0.75 and box.h >= mh * 0.75:
-                        is_slicer = v.role == "slicer"
-                        by_visual[p.visual_id] = _item(p.visual_id, box, "ai", 0.6, is_slicer=is_slicer, v=v)
-                        used.add(p.box_id)
-                        accepted += 1
+                    if is_slot_compatible(v, box):
+                        mw, mh = visual_min_size(v)
+                        if box.w >= mw * 0.75 and box.h >= mh * 0.75:
+                            is_slicer = v.role == "slicer"
+                            by_visual[p.visual_id] = _item(p.visual_id, box, "ai", 0.6, is_slicer=is_slicer, v=v)
+                            used.add(p.box_id)
+                            accepted += 1
             if accepted:
                 notes.append(f"AI matched {accepted} visual{'s' if accepted != 1 else ''} whose titles differ in the design; please check them.")
         except Exception as exc:  # matching still works without AI; the user maps the rest
@@ -808,8 +1012,7 @@ def match(plan: DashboardPlan, boxes: list[DetectedBox], llm: LLMProvider | None
 
     if fallback:
         # 4. Auto-fit placement:
-        # Visual min sizes: KPI ~180x90, chart ~300x200, table ~300x220, slicer ~140x32
-        # Priority: KPIs pehle top slots mein, phir main charts, phir tables (slicers in thin strip slots)
+        # Priority: slicers in slicer slots, KPIs in KPI slots, charts in chart slots, tables in table slots, insights
         left = [v for v in plan.visuals if v.id not in by_visual]
         free = [b for b in boxes if b.id not in used and getattr(b, "role", None) not in ("title", "nav")]
 
@@ -833,9 +1036,9 @@ def match(plan: DashboardPlan, boxes: list[DetectedBox], llm: LLMProvider | None
                     if v.id in by_visual:
                         continue
                     mw, mh = visual_min_size(v)
-                    eligible = [b for b in free if b.id not in used and b.w >= mw and b.h >= mh]
+                    eligible = [b for b in free if b.id not in used and is_slot_compatible(v, b) and b.w >= mw and b.h >= mh]
                     if not eligible:
-                        eligible = [b for b in free if b.id not in used and b.w >= mw * 0.75 and b.h >= mh * 0.75]
+                        eligible = [b for b in free if b.id not in used and is_slot_compatible(v, b) and b.w >= mw * 0.75 and b.h >= mh * 0.75]
 
                     if eligible:
                         if group_role == "kpi":
@@ -844,11 +1047,13 @@ def match(plan: DashboardPlan, boxes: list[DetectedBox], llm: LLMProvider | None
                             eligible.sort(key=lambda b: (0 if getattr(b, "slot_type", None) == "slicer" else 1, b.y, b.x))
                         elif group_role == "table":
                             eligible.sort(key=lambda b: (0 if getattr(b, "slot_type", None) == "table" else 1, -b.w * b.h))
+                        elif group_role == "insights":
+                            eligible.sort(key=lambda b: (0 if getattr(b, "slot_type", None) == "insights" else 1, b.y, b.x))
                         else:
                             eligible.sort(key=lambda b: (0 if getattr(b, "slot_type", None) == "chart" else 1, b.y, b.x))
 
                         placed_so_far = [m for m in by_visual.values() if m.placed]
-                        def _collides(cand_item: MappingItem, min_gap: int = 8) -> bool:
+                        def _collides(cand_item: MappingItem, min_gap: int = 4) -> bool:
                             return any(
                                 not (cand_item.x + cand_item.w + min_gap <= other.x or
                                      other.x + other.w + min_gap <= cand_item.x or
@@ -860,22 +1065,22 @@ def match(plan: DashboardPlan, boxes: list[DetectedBox], llm: LLMProvider | None
                         best_slot = None
                         chosen_item = None
                         for s in eligible:
-                            cand = _item(v.id, s, "fallback", 0.7, v=v)
-                            if not _collides(cand, min_gap=8):
+                            cand = _item(v.id, s, "fallback", 0.7, is_slicer=(v.role == "slicer"), v=v)
+                            if not _collides(cand, min_gap=4):
                                 best_slot = s
                                 chosen_item = cand
                                 break
                         if not best_slot:
                             best_slot = eligible[0]
-                            chosen_item = _item(v.id, best_slot, "fallback", 0.7, v=v)
-                            while _collides(chosen_item, min_gap=8):
+                            chosen_item = _item(v.id, best_slot, "fallback", 0.7, is_slicer=(v.role == "slicer"), v=v)
+                            while _collides(chosen_item, min_gap=4):
                                 colliding = next(other for other in placed_so_far if not (
-                                    chosen_item.x + chosen_item.w + 8 <= other.x or
-                                    other.x + other.w + 8 <= chosen_item.x or
-                                    chosen_item.y + chosen_item.h + 8 <= other.y or
-                                    other.y + other.h + 8 <= chosen_item.y
+                                    chosen_item.x + chosen_item.w + 4 <= other.x or
+                                    other.x + other.w + 4 <= chosen_item.x or
+                                    chosen_item.y + chosen_item.h + 4 <= other.y or
+                                    other.y + other.h + 4 <= chosen_item.y
                                 ))
-                                chosen_item.y = colliding.y + colliding.h + 8
+                                chosen_item.y = colliding.y + colliding.h + 4
 
                         chosen_item.pbi_title = True
                         by_visual[v.id] = chosen_item
@@ -883,6 +1088,9 @@ def match(plan: DashboardPlan, boxes: list[DetectedBox], llm: LLMProvider | None
                         logger.warning("Auto-fit placement: visual '%s' (%s) mapped to slot '%s' (%dx%d)",
                                        v.title, v.type, best_slot.title or best_slot.id, best_slot.w, best_slot.h)
                         notes.append(f"Fallback auto-fit: '{v.title}' placed in template slot {best_slot.id} ({best_slot.w}x{best_slot.h}px).")
+
+        # Expand vacant boxes to fill gaps
+        expand_vacant_boxes(by_visual, boxes, used)
 
         # 5. Guaranteed auto-grid placement: if slots are not enough or too small, build clean auto-grid in same theme
         still_left = [v for v in plan.visuals if v.id not in by_visual]
@@ -929,12 +1137,20 @@ def _ai_prompt(visuals, boxes: list[DetectedBox]) -> str:
 
 def resolve_mapping_overlaps(items: list[MappingItem], min_gap: int = 4) -> None:
     """Ensure no two visuals collide (gap >= min_gap).
-    Does NOT modify items if no collision exists, and preserves original positions."""
+    Only resolves true rectangle intersections (actual overlap), preserving existing small gaps."""
     placed = [m for m in items if m.placed]
     if len(placed) < 2:
         return
 
-    def _collides(a: MappingItem, b: MappingItem) -> bool:
+    def _rects_truly_intersect(a: MappingItem, b: MappingItem) -> bool:
+        return not (
+            a.x + a.w <= b.x or
+            b.x + b.w <= a.x or
+            a.y + a.h <= b.y or
+            b.y + b.h <= a.y
+        )
+
+    def _collides_with_gap(a: MappingItem, b: MappingItem) -> bool:
         return not (
             a.x + a.w + min_gap <= b.x or
             b.x + b.w + min_gap <= a.x or
@@ -942,27 +1158,27 @@ def resolve_mapping_overlaps(items: list[MappingItem], min_gap: int = 4) -> None
             b.y + b.h + min_gap <= a.y
         )
 
-    has_collision = False
+    has_true_overlap = False
     for i, a in enumerate(placed):
         for b in placed[i + 1:]:
-            if _collides(a, b):
-                has_collision = True
+            if _rects_truly_intersect(a, b):
+                has_true_overlap = True
                 break
-        if has_collision:
+        if has_true_overlap:
             break
 
-    if not has_collision:
+    if not has_true_overlap:
         return
 
     sorted_items = sorted(placed, key=lambda m: (m.y, m.x))
     resolved: list[MappingItem] = []
 
     for item in sorted_items:
-        while any(_collides(item, other) for other in resolved):
-            colliding = next(other for other in resolved if _collides(item, other))
+        while any(_collides_with_gap(item, other) for other in resolved):
+            colliding = next(other for other in resolved if _collides_with_gap(item, other))
             cand_x = colliding.x + colliding.w + min_gap
             cand_item = MappingItem(visual_id=item.visual_id, x=cand_x, y=item.y, w=item.w, h=item.h)
-            if cand_x + item.w <= CANVAS_W - 16 and not any(_collides(cand_item, o) for o in resolved):
+            if cand_x + item.w <= CANVAS_W - 16 and not any(_collides_with_gap(cand_item, o) for o in resolved):
                 item.x = cand_x
             else:
                 item.y = colliding.y + colliding.h + min_gap
@@ -1070,7 +1286,12 @@ def validate_mapping(plan: DashboardPlan, mapping: list[MappingItem], boxes: lis
     for m in mapping:
         if m.box_id is None:
             continue
-        if m.box_id not in box_ids:
+        is_valid_box = (
+            m.box_id in box_ids
+            or m.box_id.startswith(("slicer_", "kpi_slot_"))
+            or any(m.box_id.startswith(f"{bid}_") for bid in box_ids)
+        )
+        if not is_valid_box:
             issues.append(f"Box {m.box_id} does not exist in the design.")
         elif m.box_id in used:
             issues.append(f"Box {m.box_id} is used by both '{titles.get(used[m.box_id], used[m.box_id])}' and '{titles.get(m.visual_id, m.visual_id)}'.")
